@@ -1,5 +1,50 @@
 # Tag-seq
 
+
+## modification
+
+1. `detect.peaks.py`: python2 -> 3
+
+2. replace the `bedGraphToBigWig` with new version
+    ```bash
+    mamba create -p ~/.local/ucsc-bedgraphtobigwig -c bioconda -c conda-forge ucsc-bedgraphtobigwig
+    ln -sf ~/.local/bedgraphtobigwig/bin/bedGraphToBigWig Tag-seq/bin/bedGraphToBigWig
+    ```
+
+
+3. modify the `pysam` usage in umi_tools
+    ```bash
+    mamba create -p ~/.local/umitools -c bioconda -c conda-forge umi_tools
+    ```
+
+    modification was introduced in `~/.local/umitools/lib/python3.12/site-packages/umi_tools/dedup.py`
+
+    ```python
+    # line 377
+    cmd = "/opt/samtools/1.23.1/samtools sort -o " + sorted_out_name + " -O " + sort_format +       " --no-PG " + out_name
+    from subprocess import check_call
+    check_call(cmd, shell=True)
+    #pysam.sort("-o", sorted_out_name, "-O", sort_format, "--no-PG", out_name)
+    ```
+
+5. sudo apt-get install librsvg2-bin
+
+6. pip install svgwrite scipy numpy biopython
+
+7. a new version docker image
+
+
+```bash
+# usage
+# the cmd and usage were left empty, therefore full cmd should be given
+docker run --rm \
+    --user $(id -u):$(id -g) \
+    -v $PWD:/data \
+    -v /ref/mm10:/ref \
+    tag-seq \
+    perl /opt/Tag-seq/bin/run_guideseq.pl /data/config.txt all
+```
+
 ## Description of Tag-seq data analysis
 
 For Tag-seq data analysis, we retained fragments that contain an intact Tag at the beginning of read2 (second of pair). Then, reads were mapped to the reference genome (hg19) using STAR2 after quality filtering, then PCR duplications were removed using UMI-tools. To identify candidate DSBs, the start mapping positions were grouped if the distance among them is less than ten bps, resulting in editing hotspots induced by RGNs. Then, the peaks with sufficient reads were detected in RGNs hotspot. Furthermore, the peaks with reads mapping to both + and - strands, or the same strand but amplified with both forward and reverse tag-specific primers, are flagged as sites of potential DSBs. The flanking regions of potential DSBs match gRNA identified as on-target sites using a Smith-Waterman local-alignment algorithm. Identified off-targets sorted by Tag-seq read count are annotated in a final output table and visualize as a pdf file.

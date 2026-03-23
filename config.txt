@@ -1,0 +1,54 @@
+# Tag-seq 配置文件
+# 格式：键名\t值
+
+# ========== 样本信息 ==========
+PREFIX	B16
+OUTDIR	/data/outdir/
+FORWARD_LIB_R1	/data/B16-pcsk9-1-2_R1.fq
+FORWARD_LIB_R2	/data/B16-pcsk9-1-2_R2.fq
+FORWARD_LIB_TAG	TGCGATAACACGCATTTCGCATAAG
+
+REVERSE_LIB_R1	/data/B16/B16-pcsk9-1-2_R1.fq
+REVERSE_LIB_R2	/data/B16/B16-pcsk9-1-2_R2.fq
+REVERSE_LIB_TAG	ATCTCTGAGCCTTATGCGAAATGCG
+
+CTRL	/opt/Tag-seq/test/control.bed
+
+# ========== gRNA 列表文件 ==========
+GRNA	/data/sgrna_list_mouse.txt
+
+# ========== 参考基因组信息 ==========
+INDEX	/ref/star_index
+GENOME	mm10
+REF	/ref/mm10.fa
+CHROMSIZE	/ref/mm10.chrom.sizes
+
+# ========== 运行Docker时，后续参数不要动 ==========
+
+# ========== 切割位点检测参数 ==========
+MinSupportReadCount	1
+MinCuttingEventCount	2
+
+# ========== 脱靶检测参数 ==========
+MaxMismatch	6
+MaxGap	2
+MaxGapMismatch	4
+
+# ========== 序列处理参数 ==========
+MINLEN	50
+READLEN	150
+MAXINS	1000
+THREAD	16
+ADAPTER	/opt/Tag-seq/bin/adapters.txt
+
+# ========== 软件路径 ==========
+BIN	/opt/Tag-seq/bin
+FASTQC	/usr/bin/fastqc
+STAR	/usr/local/bin/STAR
+BEDTOOLS	/usr/bin/bedtools
+SAMTOOLS	/usr/bin/samtools
+PICARD	/usr/bin/picard
+AdapterRemoval	/usr/bin/AdapterRemoval
+umi_tools	/opt/umitools/bin/umi_tools
+water	/usr/bin/water
+bedops	/usr/bin/

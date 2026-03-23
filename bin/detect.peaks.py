@@ -1,8 +1,8 @@
-import os, sys
+import os
+import sys
 import re
 import numpy as np
 import scipy.signal
-#import six
 
 def usage():
     print('\nCombine cufflink quantification result to matrix\n')
@@ -15,17 +15,14 @@ def usage():
 if len(sys.argv) < 3:
     usage()
 
-
 dep_plus_f = sys.argv[1]
 dep_minus_f = sys.argv[2]
-
 min_dep = int(sys.argv[3])
 min_dis = int(sys.argv[4])
 
-#prefix = sys.argv[5]
-
-dep_plus = open(dep_plus_f, 'rb')
-dep_minus = open(dep_minus_f, 'rb')
+# 使用文本模式打开（Python 3 中默认是文本模式，不需要 'b'）
+dep_plus = open(dep_plus_f, 'r')
+dep_minus = open(dep_minus_f, 'r')
 
 # plus strand
 plus = {}
@@ -51,14 +48,16 @@ while True:
         plus_dep[id_str].append(lc[-1])
 
 for k, v in plus_dep.items():
-    vector = np.array(v)
+    vector = np.array(v, dtype=float)  # 确保是数值类型
     indexes, _ = scipy.signal.find_peaks(vector, height=min_dep, distance=min_dis)
     if len(indexes) == 0:
         continue
     else:
         for i in indexes:
             arr = plus[k]
-            print "\t".join(arr[i])
+            # Python 3: print 函数
+            print("\t".join(arr[i]))
+
 # minus strand
 minus = {}
 minus_dep = {}
@@ -83,15 +82,16 @@ while True:
         minus_dep[id_str].append(lc[-1])
 
 for k, v in minus_dep.items():
-    vector = np.array(v)
+    vector = np.array(v, dtype=float)  # 确保是数值类型
     indexes, _ = scipy.signal.find_peaks(vector, height=min_dep, distance=min_dis)
     if len(indexes) == 0:
         continue
     else:
         for i in indexes:
             arr = minus[k]
-            print >>sys.stderr, "\t".join(arr[i])
+            # Python 3: 输出到 stderr
+            sys.stderr.write("\t".join(arr[i]) + "\n")
 
-#print plus_dep
-#print >>sys.stderr, plus
-
+# 关闭文件
+dep_plus.close()
+dep_minus.close()
