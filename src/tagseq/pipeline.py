@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+from loguru import logger
 import subprocess
 from pathlib import Path
 
@@ -17,7 +17,6 @@ from .trim import remove_odn
 from .types import PipelineConfig
 from .umi import dedup_umi, extract_umi
 
-logger = logging.getLogger(__name__)
 
 # ── helpers ──
 
@@ -29,11 +28,19 @@ def _check_tools() -> None:
             raise ExternalToolError(f"Required tool not found: {cmd}")
 
 
+def proximal_path(sample_dir: Path, sample_name: str, strand: str) -> Path:
+    return sample_dir / f"{sample_name}.{strand}.proximal"
+
+
 def _run_cutadapt(r1: Path, r2: Path, cfg: PipelineConfig, sample: str) -> None:
-    """Trim adapters with cutadapt."""
+    """Trim adapters with cutadapt (supports 3' and 5' adapters)."""
     dd = cfg.data_dir(sample)
-    r1o = dd / f"{sample}.Trim.R1.fq"
-    r2o = dd / f"{sample}.Trim.R2.fq"
+    r1o = dd / f"{sample}.Trim.R1.fq.gz"
+    r2o = dd / f"{sample}.Trim.R2.fq.gz"
+
+    if not r1.exists() or not r2.exists():
+        raise ExternalToolError(f"Input files for cutadapt not found: {r1}, {r2}")
+
     cmd = [
         "cutadapt",
         "--quality-cutoff", "5",
@@ -46,11 +53,18 @@ def _run_cutadapt(r1: Path, r2: Path, cfg: PipelineConfig, sample: str) -> None:
     if cfg.adapter and cfg.adapter.exists():
         with open(cfg.adapter) as f:
             for line in f:
-                p = line.strip().split("\t")
-                if len(p) >= 2:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                p = line.split("\t")
+                if len(p) < 2:
+                    continue
+                if p[0].startswith("5p:") or p[0].startswith("5P:"):
+                    cmd += ["-g", p[0].split(":", 1)[1], "-G", p[1]]
+                else:
                     cmd += ["-a", p[0], "-A", p[1]]
     log = dd / f"{sample}.trim_report.txt"
-    r = subprocess.run(cmd, stdout=open(log, "w"), stderr=subprocess.STDOUT)
+    r = subprocess.run(cmd, stdout=open(log, "w"), stderr=subprocess.STDOUT, timeout=600)
     if r.returncode != 0:
         raise ExternalToolError(f"cutadapt failed (exit={r.returncode})")
 
@@ -70,13 +84,13 @@ def step_create_makefile(cfg: PipelineConfig) -> None:
             warns.append(f"R2 not found: {cfg.lib_r2}")
     for w in warns:
         logger.warning(w)
-    logger.info("Directories ready under %s", cfg.outdir)
+    logger.info("Directories ready under {}", cfg.outdir)
 
 
 def step_align(cfg: PipelineConfig) -> None:
     _check_tools()
     for sample_name, tag in cfg.samples:
-        logger.info("=== %s ===", sample_name)
+        logger.info("=== {} ===", sample_name)
         dd = cfg.data_dir(sample_name)
         dd.mkdir(parents=True, exist_ok=True)
 
@@ -85,8 +99,8 @@ def step_align(cfg: PipelineConfig) -> None:
 
         # 2. Cutadapt
         _run_cutadapt(r1, r2, cfg, sample_name)
-        r1t = dd / f"{sample_name}.Trim.R1.fq"
-        r2t = dd / f"{sample_name}.Trim.R2.fq"
+        r1t = dd / f"{sample_name}.Trim.R1.fq.gz"
+        r2t = dd / f"{sample_name}.Trim.R2.fq.gz"
 
         # 3. UMI extraction
         r1u, r2u = extract_umi(r1t, r2t, dd, sample_name)
@@ -110,24 +124,26 @@ def step_find_target(cfg: PipelineConfig) -> None:
         logger.error("No gRNA file configured")
         return
     grnas = _read_grnas(cfg.grna_file)
-    logger.info("Loaded %d gRNAs from %s", len(grnas), cfg.grna_file)
+    logger.info("Loaded {} gRNAs from {}", len(grnas), cfg.grna_file)
 
     for gid, gseq, gpam in grnas:
         tdir = cfg.find_target_dir(gid)
         dm = tdir / f"{gid}.parsing_water_for_visualization.offtarget.bed"
         if dm.exists():
-            logger.info("%s: already done", gid)
+            logger.info("{}: already done", gid)
             continue
 
-        def pf(name):
-            return cfg.outdir / f"{name}/02potentialTargets/{name}"
+        sample_dir_plus = cfg.outdir / f"{cfg.prefix}_plus" / "02potentialTargets"
+        sample_dir_minus = cfg.outdir / f"{cfg.prefix}_minus" / "02potentialTargets"
+        pname = f"{cfg.prefix}_plus"
+        mname = f"{cfg.prefix}_minus"
 
-        pp = pf(f"{cfg.prefix}_plus") / "plus.proximal"
-        pm = pf(f"{cfg.prefix}_plus") / "minus.proximal"
-        mp = pf(f"{cfg.prefix}_minus") / "plus.proximal"
-        mm = pf(f"{cfg.prefix}_minus") / "minus.proximal"
+        pp = proximal_path(sample_dir_plus, pname, "plus")
+        pm = proximal_path(sample_dir_plus, pname, "minus")
+        mp = proximal_path(sample_dir_minus, mname, "plus")
+        mm = proximal_path(sample_dir_minus, mname, "minus")
 
-        logger.info("Off-target: %s (PAM=%s)", gid, gpam)
+        logger.info("Off-target: {} (PAM={})", gid, gpam)
         find_offtargets(
             pp, pm, mp, mm,
             control=cfg.ctrl,

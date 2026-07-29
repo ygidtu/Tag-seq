@@ -2,25 +2,24 @@
 
 from __future__ import annotations
 
-import logging
+from loguru import logger
 import sys
 
 import click
 
-from .config import load_config
+from .config import load_config, validate_config
 from .exceptions import TagseqError
-from .pipeline import step_align, step_create_makefile, step_find_target
+from .pipeline import step_align, step_create_makefile, step_find_target, _read_grnas
 from .report import generate_report, print_report
+from .plot import plot_statistics, plot_offtarget_alignment, plot_mismatch_profile
+from .qc import generate_html
 
-logger = logging.getLogger("tagseq")
 
 
 def _setup_logging(v: bool) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if v else logging.INFO,
-        format="%(levelname)s %(message)s",
-        stream=sys.stderr,
-    )
+    logger.remove()
+    level = "DEBUG" if v else "INFO"
+    logger.add(sys.stderr, level=level)
 
 
 @click.group()
@@ -32,6 +31,11 @@ def cli(ctx, config, verbose, resume):
     _setup_logging(verbose)
     ctx.ensure_object(dict)
     ctx.obj["cfg"] = load_config(config)
+    issues = validate_config(ctx.obj["cfg"])
+    for iss in issues:
+        logger.error("Config: {}", iss)
+    if issues:
+        raise click.Abort()
     ctx.obj["resume"] = resume
 
 
@@ -65,12 +69,63 @@ def report(ctx):
 
 
 @cli.command()
+@click.option("--min-reads", default=1, type=int, help="Minimum read count filter")
 @click.pass_context
-def all(ctx):
-    """Full pipeline."""
+def all(ctx, min_reads):
+    """Full pipeline + plot."""
     ctx.invoke(create_makefile)
     ctx.invoke(align)
     ctx.invoke(find_target)
+    ctx.obj["min_reads"] = min_reads
+    ctx.invoke(plot)
+
+
+@cli.command()
+@click.option("--min-reads", default=1, type=int, help="Minimum read count filter (default: 1)")
+@click.pass_context
+def plot(ctx, min_reads):
+    """Generate plots from existing results (skip analysis)."""
+    cfg = ctx.obj["cfg"]
+
+    # Stats chart
+    plot_statistics(cfg)
+
+    # Mismatch profile
+    plot_mismatch_profile(cfg)
+
+    # QC report
+    qc_path = generate_html(cfg)
+    if qc_path:
+        logger.info("QC report -> {}", qc_path)
+
+    # Off-target alignment plots for each gRNA
+    if cfg.grna_file and cfg.grna_file.exists():
+        grnas = _read_grnas(cfg.grna_file)
+        for gid, gseq, gpam in grnas:
+            target_dir = cfg.find_target_dir(gid)
+            offtarget_bed = target_dir / f"{gid}.parsing_water_for_visualization.offtarget.bed"
+            ext_fa = target_dir / f"{gid}.ext.fa"
+            if offtarget_bed.exists():
+                out_pdf = target_dir / f"{gid}_offtargets.pdf"
+                plot_offtarget_alignment(offtarget_bed, ext_fa, gseq, gpam or "NGG", out_pdf, title=gid, min_reads=min_reads)
+            else:
+                logger.warning("No off-target BED for {}, run 'find-target' first", gid)
+    else:
+        logger.warning("No gRNA file configured, skipping off-target plots")
+
+    # QC report
+    qc_path = generate_html(ctx.obj["cfg"])
+    if qc_path:
+        logger.info("QC report -> {}", qc_path)
+
+
+@cli.command()
+@click.pass_context
+def qc(ctx):
+    """Generate QC HTML report from existing results."""
+    qc_path = generate_html(ctx.obj["cfg"])
+    if qc_path:
+        logger.info("QC report -> {}", qc_path)
 
 
 def main():

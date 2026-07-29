@@ -1,0 +1,41 @@
+# Tag-seq: 改造后文库 (Modified Library)
+# 文库结构:
+#   L文库 R1: Universal primer(16bp) + UMI(8bp) + Barcode(8bp) + AdapterJ(16bp) + Genome + Tag(24bp)
+#   L文库 R2: Tag(24bp) + Genome + AdapterJ(16bp) + Barcode(8bp) + UMI(8bp) + Universal primer RC(16bp)
+#   R文库 R1: 同上 (Tag 序列不同)
+#   R文库 R2: 同上 (Tag 序列不同)
+#
+# Tag 序列:
+#   L-Tag-F: ATCTCTGAGCCTTATGCGAAATGCG  (R1 3'端)
+#   L-Tag-R: CGCATTTCGCATAAGGCTCAGAGAT  (R2 5'端, 脚本搜索此序列)
+#   R-Tag-F: CTTATGCGAAATGCGTGTTATCGCA  (R1 3'端)
+#   R-Tag-R: TGCGATAACACGCATTTCGCATAAG  (R2 5'端)
+#
+# 注意: 配置中的 FORWARD_TAG/REVERSE_TAG 是 R2 中实际搜索的序列 (Tag 反向互补)
+#
+LIB_R1  ./raw_data/modified_R1.fq.gz
+LIB_R2  ./raw_data/modified_R2.fq.gz
+FORWARD_TAG     CGCATTTCGCATAAGGCTCAGAGAT
+REVERSE_TAG     TGCGATAACACGCATTTCGCATAAG
+
+PREFIX  MODIFIED
+OUTDIR  ./outdir/MODIFIED
+GRNA    ./sgrna_list.txt
+CTRL    ./control.bed
+
+# 改造后文库: UMI 前有 16bp Universal primer, UMI 后有 8bp Barcode
+# 先由 cutadapt 5' 修剪去掉 Universal primer, 再提取 8bp UMI
+UMI_LEN 8
+
+MinSupportReadCount     1
+MinCuttingEventCount    2
+MaxMismatch     6
+MaxGap  2
+MaxGapMismatch  4
+MINLEN  50
+THREAD  16
+
+INDEX	/rawdata1/hg38/star
+GENOME  hg38
+REF     /rawdata/reference/hg38/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+CHROMSIZE       /rawdata/reference/hg38/hg38.chrom.sizes

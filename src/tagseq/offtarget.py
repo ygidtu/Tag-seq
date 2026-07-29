@@ -1,6 +1,10 @@
-"""Off-target identification — pure Python (pysam instead of bedtools/samtools)."""
+"""Off-target identification."""
 
 from __future__ import annotations
+import logging
+from pathlib import Path
+from loguru import logger
+from tqdm import tqdm
 
 import logging
 from pathlib import Path
@@ -8,203 +12,270 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-# ── interval helpers ──
-
-def _read_bed(path: Path):
-    """Yield (chrom, start, end, *rest) tuples from a BED file."""
+def _read_bed(path: Path, tag: str = ""):
+    """Yield (chrom, start, end, id, count, tag) from proximal BED."""
     if not path.exists() or path.stat().st_size == 0:
         return
     with open(path) as f:
         for line in f:
             p = line.strip().split("\t")
-            if len(p) >= 3:
-                yield p[0], int(p[1]), int(p[2]), *p[3:]
+            if len(p) >= 5:
+                yield p[0], int(p[1]), int(p[2]), p[3], int(p[4]), tag
 
 
-def _sort_bed(intervals):
-    """Sort intervals by (chrom, start)."""
-    return sorted(intervals, key=lambda x: (x[0], x[1]))
-
-
-def _merge_bed(intervals, dist=0):
-    """Merge intervals within dist bp."""
-    intervals = _sort_bed(intervals)
+def _merge(intervals, max_dist=10):
+    """Merge overlapping/nearby intervals, sum counts."""
     if not intervals:
-        return
-    cur = list(intervals[0])
-    for iv in intervals[1:]:
-        if iv[0] == cur[0] and iv[1] <= cur[2] + dist:
-            cur[2] = max(cur[2], iv[2])
-            if len(iv) > 3 and len(cur) > 3:
-                cur[3] = f"{cur[3]},{iv[3]}"
+        return []
+    s = sorted(intervals, key=lambda x: (x[0], x[1]))
+    m = [list(s[0])]
+    for iv in s[1:]:
+        if iv[0] == m[-1][0] and iv[1] <= m[-1][2] + max_dist:
+            m[-1][2] = max(m[-1][2], iv[2])
+            m[-1][3] += f",{iv[3]}"
+            m[-1][4] += iv[4]
         else:
-            yield tuple(cur)
-            cur = list(iv)
-    yield tuple(cur)
+            m.append(list(iv))
+    return [tuple(x) for x in m]
 
 
-def _slop(iv, chromsize_map, bp=40):
-    """Extend interval by bp on both sides, clipped to chromosome."""
-    chrom, start, end = iv[0], iv[1], iv[2]
-    chrom_len = chromsize_map.get(chrom, 10**9)
-    return (chrom, max(0, start - bp), min(chrom_len, end + bp), *iv[3:])
+def _slop(iv, chrom_len, bp=40):
+    cl = chrom_len.get(iv[0], 10**9)
+    return (iv[0], max(0, iv[1] - bp), min(cl, iv[2] + bp)) + iv[3:]
 
-
-def _subtract(intervals, exclude):
-    """Remove intervals that overlap with exclude list."""
-    for iv in intervals:
-        overlap = False
-        for ex in exclude:
-            if iv[0] == ex[0] and iv[1] < ex[2] and iv[2] > ex[1]:
-                overlap = True
-                break
-        if not overlap:
-            yield iv
-
-
-# ── public API ──
 
 def find_offtargets(
-    plus_plus: Path, plus_minus: Path,
-    minus_plus: Path, minus_minus: Path,
-    control: Path | None,
-    blacklist: Path | None,
-    grna_seq: str,
-    ref_fa: Path,
-    chromsize: Path,
-    prefix: str,
-    outdir: Path,
-    min_support: int = 1,
-    cut_events: int = 2,
-    max_mismatch: int = 6,
-) -> Path | None:
-    """Full off-target detection — pure Python (pysam + built-ins)."""
+    plus_plus, plus_minus, minus_plus, minus_minus,
+    control, blacklist, grna_seq, ref_fa, chromsize,
+    prefix, outdir,
+    min_support=1, cut_events=2, max_mismatch=6,
+):
     import pysam
+    from Bio import SeqIO
+    from Bio.Align import PairwiseAligner
 
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # ── 0. Parse chrom.sizes ──
-    chrom_len: dict[str, int] = {}
+    chrom_len = {}
     with open(chromsize) as f:
         for line in f:
             p = line.strip().split("\t")
             if len(p) >= 2:
                 chrom_len[p[0]] = int(p[1])
 
-    # ── 1. Read counts from strand-specific BEDs ──
-    tcount: dict[str, int] = {}
-    for f in [plus_plus, plus_minus, minus_plus, minus_minus]:
-        for iv in _read_bed(f):
-            if len(iv) >= 5:
-                tcount[iv[3]] = int(iv[4])
-    if not tcount:
-        logger.warning("%s: no sites", prefix)
+    labels = {"plus_plus": plus_plus, "plus_minus": plus_minus,
+              "minus_plus": minus_plus, "minus_minus": minus_minus}
+    all_by_tag = {k: list(_read_bed(p, k)) for k, p in labels.items()}
+    total = sum(len(v) for v in all_by_tag.values())
+    if total == 0:
+        logger.warning("{}: no sites", prefix)
         return None
+    logger.info("{}: {} total sites", prefix, total)
 
-    # ── 2. Merge + filter ──
-    all_ivs = list(_read_bed(plus_plus)) + list(_read_bed(plus_minus)) + \
-              list(_read_bed(minus_plus)) + list(_read_bed(minus_minus))
-    all_ivs = _sort_bed(all_ivs)
+    combined = []
+    for tag, ivs in all_by_tag.items():
+        for iv in ivs:
+            combined.append(iv)
+    merged = _merge(combined, 10)
 
-    # Write all_sites.bed
-    (outdir / f"{prefix}.all.sites.bed").write_text(
-        "\n".join("\t".join(map(str, iv[:3]) + [iv[3]] if len(iv) > 3 else map(str, iv[:3])) for iv in all_ivs) + "\n"
-    )
-
-    merged = list(_merge_bed(all_ivs, dist=10))
-    merged_out = outdir / f"{prefix}.all.sites.merged"
-    merged_out.write_text(
-        "\n".join("\t".join(map(str, iv[:3]) + [iv[3]] if len(iv) > 3 else map(str, iv[:3])) for iv in merged) + "\n"
-    )
-
-    # ── 3. Filter by support ──
-    confirmed_raw = []
+    confirmed = []
     for iv in merged:
-        ids = iv[3].split(",") if len(iv) > 3 else []
-        mid = (iv[1] + iv[2]) // 2
-        c = {"plus_plus": 0, "plus_minus": 0, "minus_plus": 0, "minus_minus": 0}
-        for sid in ids:
-            tt = sid.split("_")
-            if len(tt) >= 3:
-                idx = f"{tt[1]}_{tt[2]}"
-                if idx in c:
-                    c[idx] += tcount.get(sid, 0)
-        if sum(1 for v in c.values() if v >= min_support) >= cut_events:
-            confirmed_raw.append(
-                (iv[0], mid, mid + 1, iv[3],
-                 c["plus_plus"], c["plus_minus"], c["minus_plus"], c["minus_minus"])
-            )
+        chrom, start, end = iv[0], iv[1], iv[2]
+        mid = (start + end) // 2
+        tag_counts = {"plus_plus": 0, "plus_minus": 0,
+                      "minus_plus": 0, "minus_minus": 0}
+        for civ in combined:
+            if civ[0] == chrom and civ[1] < end and civ[2] > start:
+                if civ[5] in tag_counts:
+                    tag_counts[civ[5]] += civ[4]
+        if sum(1 for v in tag_counts.values() if v >= min_support) >= cut_events:
+            confirmed.append((chrom, mid, mid + 1, iv[3],
+                              tag_counts["plus_plus"], tag_counts["plus_minus"],
+                              tag_counts["minus_plus"], tag_counts["minus_minus"]))
 
-    if not confirmed_raw:
-        return None
-
-    # ── 4. Subtract blacklist + control ──
-    blacklist_ivs = list(_read_bed(blacklist)) if blacklist and blacklist.exists() else []
-    control_ivs = list(_read_bed(control)) if control and control.exists() else []
-
-    confirmed = list(_subtract(confirmed_raw, blacklist_ivs))
     if not confirmed:
+        logger.warning("{}: no confirmed sites (need {} orients >= {} reads)", prefix, cut_events, min_support)
         return None
+    logger.info("{}: {} confirmed", prefix, len(confirmed))
 
-    # Extend
+    confirmed_raw = outdir / f"{prefix}.all.sites.merged.confirmed.raw"
+    with open(confirmed_raw, "w") as f:
+        for iv in confirmed:
+            f.write("\t".join(map(str, iv)) + "\n")
+
+    for name, exclude_list in [("blacklist", _read_bed(blacklist) if blacklist and blacklist.exists() else []),
+                                ("control", _read_bed(control) if control and control.exists() else [])]:
+        if exclude_list:
+            kept = []
+            for iv in confirmed:
+                if not any(iv[0] == e[0] and iv[1] < e[2] and iv[2] > e[1] for e in exclude_list):
+                    kept.append(iv)
+            confirmed = kept
+            if not confirmed:
+                logger.warning("{}: all sites filtered by {}", prefix, name)
+                return None
+
     extended = [_slop(iv, chrom_len, 40) for iv in confirmed]
-
-    # Subtract control
-    filtered = list(_subtract(extended, control_ivs))
-    if not filtered:
-        return None
-
-    # ── 5. Extract FASTA ──
     ext_bed = outdir / f"{prefix}.ext.bed"
     with open(ext_bed, "w") as f:
-        for iv in filtered:
+        for iv in extended:
             f.write(f"{iv[0]}\t{iv[1]}\t{iv[2]}\t{iv[3]}\n")
 
     ext_fa = outdir / f"{prefix}.ext.fa"
     with pysam.FastaFile(str(ref_fa)) as fa, open(ext_fa, "w") as f:
-        for iv in filtered:
-            chrom, start, end = iv[0], iv[1], iv[2]
-            seq = fa.fetch(chrom, start, end).upper()
+        for iv in extended:
+            seq = fa.fetch(iv[0], iv[1], iv[2]).upper()
             if seq:
-                f.write(f">{chrom}:{start}-{end}|{iv[3]}\n{seq}\n")
-
+                # iv[4:] are [plus_plus, plus_minus, minus_plus, minus_minus] counts
+                total_count = sum(iv[4:8]) if len(iv) >= 8 else 0
+                f.write(f">{iv[0]}:{iv[1]}-{iv[2]}|cnt={total_count}|{iv[3]}\n{seq}\n")
     if ext_fa.stat().st_size == 0:
         return None
-
-    # ── 6. Smith-Waterman ──
-    from Bio import SeqIO
-    from Bio.Align import PairwiseAligner
 
     aligner = PairwiseAligner()
     aligner.mode = "local"
     aligner.match_score = 5
     aligner.mismatch_score = -4
-    aligner.gap_open_score = -10
-    aligner.gap_extend_score = -0.5
+    aligner.open_gap_score = -10
+    aligner.extend_gap_score = -0.5
 
     results = []
-    for record in SeqIO.parse(ext_fa, "fasta"):
-        for strand, tseq in [
+    records = list(SeqIO.parse(ext_fa, "fasta"))
+    pbar = tqdm(total=len(records) * 2, unit="align", desc="  Smith-Waterman", leave=False)
+    for record in records:
+        for strand_label, tseq in [
             ("+", str(record.seq).upper()),
             ("-", str(record.seq.reverse_complement()).upper()),
         ]:
             alns = aligner.align(grna_seq.upper(), tseq)
-            if not alns:
-                continue
-            best = alns[0]
-            mm = sum(1 for a, b in zip(*best.aligned) if a != b)
-            if mm <= max_mismatch:
-                results.append((record.id, best.score, mm, strand))
+            if alns:
+                best = alns[0]
+                # Build full-length aligned strings
+                grna_aln, genome_aln = _build_alignment(grna_seq.upper(), tseq, aligner)
+                if not grna_aln:
+                    pbar.update(1)
+                    continue
+                ai = 0
+                mm = 0
+                for ri in range(len(grna_seq)):
+                    while ai < len(grna_aln) and grna_aln[ai] == "-":
+                        ai += 1
+                    if ai >= len(grna_aln) or ai >= len(genome_aln):
+                        break
+                    if genome_aln[ai] != "-" and grna_aln[ai] != genome_aln[ai]:
+                        mm += 1
+                    ai += 1
+                if mm <= max_mismatch:
+                    results.append((record.id, best.score, mm, strand_label, genome_aln, grna_aln))
+            pbar.update(1)
+    pbar.close()
 
     if not results:
+        logger.warning("{}: no off-targets after SW", prefix)
         return None
 
     bed = outdir / f"{prefix}.parsing_water_for_visualization.offtarget.bed"
-    with open(bed, "w") as f:
-        f.write("#chrom\tstart\tend\tid\tscore\tmm\tstrand\n")
-        for rid, sc, mm, strand in sorted(results, key=lambda x: -x[1]):
-            chrom = rid.split(":")[0] if ":" in rid else rid
-            f.write(f"{chrom}\t0\t0\t{rid}\t{sc}\t{mm}\t{strand}\n")
 
-    logger.info("%s: %d off-targets", prefix, len(results))
+    # Build entries with read count, aligned sequence, ref seq
+    bed_entries = []
+    for rid, sc, mm, strand, genome_aln, grna_aln in results:
+        if ":" in rid:
+            chrom = rid.split(":")[0]
+            rest = rid.split(":", 1)[1]
+            coords = rest.split("|")[0] if "|" in rest else rest
+            if "-" in coords:
+                start_str, end_str = coords.split("-")
+                start = int(start_str)
+                end = int(end_str)
+            else:
+                start, end = 0, 0
+        else:
+            chrom, start, end = rid, 0, 0
+        # Parse count from rid header: ...|cnt=N|...
+        read_count = 1
+        if "|cnt=" in rid:
+            cnt_part = rid.split("|cnt=")[1]
+            cnt_val = cnt_part.split("|")[0] if "|" in cnt_part else cnt_part
+            try:
+                read_count = int(cnt_val)
+            except ValueError:
+                pass
+
+        # Extract gRNA-aligned 20bp display sequence
+        disp_chars = []
+        ai = 0
+        for ri in range(len(grna_seq)):
+            while ai < len(grna_aln) and grna_aln[ai] == "-":
+                ai += 1
+            if ai >= len(grna_aln) or ai >= len(genome_aln):
+                disp_chars.append("-")
+                continue
+            tc = genome_aln[ai]
+            gc = grna_aln[ai]
+            if tc == "-":
+                disp_chars.append("-")
+            elif gc == tc:
+                disp_chars.append(".")
+            else:
+                disp_chars.append(tc)
+            ai += 1
+        disp = "".join(disp_chars)
+        bed_entries.append((chrom, start, end, rid, sc, mm, strand, read_count, genome_aln, grna_aln, disp))
+
+    # Sort by reads desc, then score desc
+    bed_entries.sort(key=lambda x: (-x[7], -x[4]))
+
+    # Move perfect match (all dots) to top
+    perfect = [e for e in bed_entries if e[10].replace(".", "") == ""]
+    others = [e for e in bed_entries if e[10].replace(".", "") != ""]
+    bed_entries = perfect + others
+
+    # Deduplicate by position: keep higher score strand
+    seen_pos = set()
+    deduped = []
+    for e in bed_entries:
+        pos_key = (e[0], e[1], e[2])
+        if pos_key not in seen_pos:
+            seen_pos.add(pos_key)
+            deduped.append(e)
+    bed_entries = deduped
+
+    ref_seq = grna_seq.upper()
+    with open(bed, "w") as f:
+        f.write("#chrom\tstart\tend\tid\treads\taligned_seq\tref_seq\tstrand\n")
+        for chrom, start, end, rid, sc, mm, strand, read_count, genome_aln, grna_aln, disp in bed_entries:
+            f.write(f"{chrom}\t{start}\t{end}\t{rid}\t{read_count}\t{disp}\t{ref_seq}\t{strand}\n")
+
+    logger.info("{}: {} off-targets", prefix, len(results))
     return bed
+
+
+def _build_alignment(query: str, target: str, aligner) -> tuple[str, str]:
+    """Build gapped alignment strings of equal length."""
+    alns = aligner.align(query, target)
+    if not alns:
+        return "", ""
+    best = alns[0]
+    coords = best.aligned
+    q_blocks = coords[0]
+    t_blocks = coords[1]
+    q_parts, t_parts = [], []
+    qi = ti = 0
+    for (qs, qe), (ts, te) in zip(q_blocks, t_blocks):
+        if qs > qi:
+            q_parts.append(query[qi:qs])
+            t_parts.append("-" * (qs - qi))
+        if ts > ti:
+            q_parts.append("-" * (ts - ti))
+            t_parts.append(target[ti:ts])
+        q_parts.append(query[qs:qe])
+        t_parts.append(target[ts:te])
+        qi = qe
+        ti = te
+    if qi < len(query):
+        q_parts.append(query[qi:])
+        t_parts.append("-" * (len(query) - qi))
+    if ti < len(target):
+        q_parts.append("-" * (len(target) - ti))
+        t_parts.append(target[ti:])
+    return "".join(q_parts), "".join(t_parts)
