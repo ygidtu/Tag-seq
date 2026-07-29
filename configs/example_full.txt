@@ -1,0 +1,55 @@
+# Tag-seq 全参数配置模板
+# ─────────────────────────────────────────
+# 格式: key<TAB or SPACE>value
+# '#' 开头为注释
+#
+# 参考基因组也可填 mm10:
+#   INDEX     /rawdata/reference/mm10/star_index
+#   GENOME    mm10
+#   REF       /rawdata/reference/mm10/mm10.fa
+#   CHROMSIZE /rawdata/reference/mm10/mm10.chrom.sizes
+
+# ═══════════════════ 测序数据 ═══════════════════
+# forward / reverse 共用同一份数据 (R1/R2 各一个文件)
+LIB_R1  ./raw_data/sample_R1.fq.gz
+LIB_R2  ./raw_data/sample_R2.fq.gz
+
+# Tag 序列 (填入原始 tag 的反向互补, 脚本内部会再转一次)
+# 原始 tag = TGCGATAACACGCATTTCGCATAAG
+# 配置中填:  CTTATGCGAAATGCGTGTTATCGCA
+FORWARD_TAG     CTTATGCGAAATGCGTGTTATCGCA
+REVERSE_TAG     CGCATTTCGCATAAGGCTCAGAGAT
+
+# ═══════════════════ 样品信息 ═══════════════════
+PREFIX  SAMPLE          # 输出目录名前缀
+OUTDIR  ./outdir/SAMPLE # 输出目录
+
+# ═══════════════════ gRNA 列表 ═══════════════════
+# 格式: gRNA_id<空白>sequence<空白>PAM
+GRNA    ./sgrna_list.txt
+
+# ═══════════════════ 参考基因组 ═══════════════════
+INDEX   /path/to/reference/star_index
+GENOME  hg38            # 用于 blacklist 路径: data/{GENOME}.blacklist.bed
+REF     /path/to/reference/genome.fa
+CHROMSIZE       /path/to/reference/genome.chrom.sizes
+
+# ═══════════════════ 可选: 对照 / blacklist ═══════════════════
+CTRL            /path/to/control.bed    # 对照样本 BED
+BLACKLIST       /path/to/blacklist.bed  # 黑名单 (默认: data/{GENOME}.blacklist.bed)
+
+# ═══════════════════ 可选: 自定义路径 ═══════════════════
+ADAPTER ./bin/adapters.txt              # 接头序列 (默认: bin/adapters.txt)
+BIN     /path/to/Tag-seq/bin            # 自定义脚本目录
+
+# ═══════════════════ 分析参数 ═══════════════════
+MINLEN  50      # 最短 read 长度
+READLEN 150     # read 长度
+THREAD  16      # CPU 线程数
+
+MinSupportReadCount     1       # 至少支持 reads 数
+MinCuttingEventCount    2       # 至少方向数
+
+MaxMismatch     6       # 最大错配
+MaxGap          2       # 最大 gap
+MaxGapMismatch  4       # gap 内最大错配

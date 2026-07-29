@@ -33,9 +33,64 @@ my $sample_f = abs_path($conf{SAMPLE});
 my $out = abs_path($conf{OUTDIR});
 my $thread = $conf{THREAD};
 
+# Validate config
+foreach my $key (qw(SAMPLE OUTDIR THREAD BIN INDEX REF CHROMSIZE)){
+    defined $conf{$key} or die "[ERROR] Missing required config key: $key\n";
+}
+-f $sample_f or die "[ERROR] SAMPLE file not found: $sample_f\n";
+
+# Validate tool paths
+foreach my $tool (qw(BIN FASTQC STAR BEDTOOLS SAMTOOLS AdapterRemoval umi_tools)){
+    my $path = $conf{$tool};
+    if($tool eq "BIN"){ next }  # BIN is a dir, checked by scripts below
+    if($tool eq "umi_tools"){ next }  # umi_tools is a python script, checked at runtime
+    my $bin = (split /\s+/, $path)[0];
+    -f $bin or -x $bin or -x "$bin" or warn "[WARN] Tool not found: $tool => $bin (may fail later)\n";
+}
+
+# Validate reference
+-f $conf{REF} or die "[ERROR] Reference FASTA not found: $conf{REF}\n";
+-f $conf{CHROMSIZE} or die "[ERROR] Chromosome sizes not found: $conf{CHROMSIZE}\n";
+-d $conf{INDEX} or die "[ERROR] STAR index not found: $conf{INDEX}\n";
+
 #### write you things ###
 #decide to add function in another file
 #my %compare;
+# Verify tag orientation: check if tag (original) appears in R2
+open VERIFY,"$sample_f" || die $!;
+while(<VERIFY>){
+	chomp;
+	next if(/^$/);
+	next if(/^#/);
+	my @t = split /\t/;
+	my $tag = $t[-1];
+	my $r2 = abs_path($t[2]);
+	next unless(-f $r2);
+	
+	my $tag_count = 0;
+	my $rev_count = 0;
+	my $n_check = 1000;
+	
+	open R2C,"$r2" || next;
+	for(my $i=0; $i<$n_check*4 && !eof(R2C); $i++){
+		my $seq = <R2C>; <R2C>; <R2C>; <R2C>;
+		chomp($seq);
+		$tag_count++ if(index($seq, $tag) >= 0);
+		my $rev = reverse($tag); $rev =~ tr/TCGA/AGCT/;
+		$rev_count++ if(index($seq, $rev) >= 0);
+	}
+	close R2C;
+	
+	if($tag_count < $rev_count){
+		warn "[WARN] $t[0]: tag orientation seems reversed in R2!\n";
+		warn "[WARN]   Tag '$tag' found $tag_count/$n_check reads\n";
+		warn "[WARN]   Rev-comp found $rev_count/$n_check reads\n";
+		warn "[HINT] FORWARD_LIB_TAG should be the reverse complement of the actual tag sequence\n";
+		warn "[HINT] See config file for example\n";
+	}
+}
+close VERIFY;
+
 open IN,"$sample_f" || die $!;
 while(<IN>){
 	chomp;
@@ -89,8 +144,8 @@ while(<IN>){
 	$all .= "00fastqc.origin.finished ";
 
 	# remove ODN
-	$mk .= "00rmODN.finished: $r1 $r2\n";
-	$mk .= "\tperl $conf{BIN}/remove_ODN.pl $r1 $r2 $tag_rev_comp $out/$id/00datafilter $id > $out/$id/00datafilter/$id.rmODN.log 2> $out/$id/00datafilter/$id.rmODN.err && touch 00rmODN.finished\n";
+	$mk .= "00rmODN.finished: 00fastqc.origin.finished\n";
+	$mk .= "\tperl $conf{BIN}/remove_ODN.pl $r1 $r2 $tag_rev_comp $out/$id/00datafilter $id > $out/$id/00datafilter/$id.rmODN.log 2>> $out/$id/00datafilter/$id.rmODN.err && touch 00rmODN.finished\n";
 	$all .= "00rmODN.finished ";
 	
 	$r1 = "$out/$id/00datafilter/$id.rmODN.R1.fq";

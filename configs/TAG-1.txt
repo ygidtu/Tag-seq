@@ -1,0 +1,27 @@
+# Tag-seq: TAG-1 sample (hg38)
+#
+LIB_R1  raw_data/20260713_E260713006_U5900_TAG-1/RawData/TAG-1/E260713006_L01_TAG-1_1.fq
+LIB_R2  raw_data/20260713_E260713006_U5900_TAG-1/RawData/TAG-1/E260713006_L01_TAG-1_2.fq
+FORWARD_TAG     CTTATGCGAAATGCGTGTTATCGCA
+REVERSE_TAG     CGCATTTCGCATAAGGCTCAGAGAT
+
+PREFIX  TAG-1
+OUTDIR  ./outdir/TAG-1
+GRNA    /rawdata1/projects/Cas12f/res/offtarget/sgrnas/sgrna_list_mouse.txt
+CTRL    /rawdata1/projects/Cas12f/res/offtarget/Tag-seq/test/control.bed
+
+MinSupportReadCount     1
+MinCuttingEventCount    2
+MaxMismatch     6
+MaxGap  2
+MaxGapMismatch  4
+MINLEN  100
+READLEN 150
+THREAD  16
+ADAPTER /rawdata1/projects/Cas12f/res/offtarget/Tag-seq/bin/adapters.txt
+BIN     /rawdata1/projects/Cas12f/res/offtarget/Tag-seq/bin
+
+INDEX   /rawdata/reference/hg38/star/2.7.10b
+GENOME  hg38
+REF     /rawdata/reference/hg38/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+CHROMSIZE       /rawdata/reference/hg38/hg38.chrom.sizes

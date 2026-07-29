@@ -1,0 +1,18 @@
+# Tag-seq 配置示例 — 最小配置 (6 行必填)
+# 格式: key  value
+#
+LIB_R1  ./raw_data/sample_R1.fq.gz
+LIB_R2  ./raw_data/sample_R2.fq.gz
+FORWARD_TAG     CTTATGCGAAATGCGTGTTATCGCA
+REVERSE_TAG     CGCATTTCGCATAAGGCTCAGAGAT
+INDEX   /rawdata/reference/hg38/star/2.7.10b
+REF     /rawdata/reference/hg38/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+CHROMSIZE       /rawdata/reference/hg38/hg38.chrom.sizes
+
+# ── 可选 ──
+PREFIX  SAMPLE
+OUTDIR  ./outdir/SAMPLE
+GRNA    ./sgrna_list.txt
+CTRL    ./control.bed
+MINLEN  50
+THREAD  16

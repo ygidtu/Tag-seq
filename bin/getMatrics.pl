@@ -41,7 +41,7 @@ foreach my $s (@ARGV){
 	#Read count with ODN: 27218
 	#
 	my $f = $f[0];
-	&checkExists($f);
+	&checkExists($f, "sample=$s, expecting *.rmODN.stat in $s/00datafilter/");
 	my $total = 0;
 	my $pass = 0;
 	open IN,"$f" || die $!;
@@ -51,6 +51,8 @@ foreach my $s (@ARGV){
 		$pass = $1 if(/Read count with ODN: (\d+)/);
 	}
 	close IN;
+	
+	$total > 0 or die "[ERROR] Invalid rmODN.stat: total=0 in $f\n";
 	
 	my $filtered = $total - $pass;
 	my $per = sprintf("%.2f",($pass)*100/$total);
@@ -73,7 +75,7 @@ my @readsper;
 foreach my $s (@ARGV){
 	my @f = glob("$s/00datafilter/*adapterRemoval.setting");
 	my $f = $f[0];
-	&checkExists($f);
+	&checkExists($f, "sample=$s, expecting *adapterRemoval.setting in $s/00datafilter/");
 	my $total = 0;
 	open IN,"$f" || die $!;
 	while(<IN>){
@@ -86,7 +88,7 @@ foreach my $s (@ARGV){
 	my $pass = 0;
 	my @f1 = glob("$s/01alignment/$s.Log.final.out");
 	my $f1 = $f1[0];
-	&checkExists($f1);
+	&checkExists($f1, "sample=$s, expecting $s.Log.final.out in $s/01alignment/");
 	open IN,"$f1" || die $!;
 	while(<IN>){
 		chomp;
@@ -117,8 +119,8 @@ my @aligned;
 my @AlignRate;
 my $i = 0;
 foreach my $s (@ARGV){
-	my $f = "$s/01alignment/$s.Log.final.out";
-	&checkExists($f);
+	my 	$f = "$s/01alignment/$s.Log.final.out";
+	&checkExists($f, "sample=$s, STAR Log.final.out");
 	my $readCleanTotal = $readspass[$i];
 	my $rate;
 	my $aligned;
@@ -168,7 +170,7 @@ my @uniq_tag;
 my @DupRate;
 foreach my $s (@ARGV){
 	my $f = "$s/01alignment/$s.Aligned.sortedByCoord.out.dedup.bam.flagstat";
-	&checkExists($f);
+	&checkExists($f, "sample=$s, dedup bam flagstat");
 	my $readMappedTotal = $aligned[$i];
 	my $uniq;
 	my $duprate;
@@ -197,7 +199,7 @@ my @usable_tag;
 my @filterRate;
 foreach my $s (@ARGV){
 	my $f = "$s/02potentialTargets/$s.Aligned.sortedByCoord.out.dedup.single.filtered.bam.flagstat";
-	&checkExists($f);
+	&checkExists($f, "sample=$s, filtered bam flagstat in 02potentialTargets");
 	my $readMappedTotal = $uniq_tag[$i];
 	my $usable;
 	my $filterrate;
@@ -253,8 +255,11 @@ sub ArrAsCol{
 
 sub checkExists{
 	my $ffname = shift @_;
+	my $context = shift @_ || "";
 	unless(-e $ffname){
-		print STDERR "$ffname not exists!\n";
+		print STDERR "[ERROR] File not exists: $ffname\n";
+		print STDERR "[ERROR] Context: $context\n" if $context;
+		print STDERR "[HINT] Check if previous pipeline steps completed successfully.\n";
 		exit(1);
 	}
 }

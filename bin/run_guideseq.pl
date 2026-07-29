@@ -17,6 +17,9 @@ sub usage {
         Author: zhoujj2013\@gmail.com 2020/3/25
         Last update: 2020/9/29
         Usage: $0 <config.txt> <all|create_makefile|align|find_target>
+               $0 <config.txt> resume [all|create_makefile|align|find_target]
+
+        Use 'resume' to skip already-completed steps (safe to re-run after failure).
 
 USAGE
 print "$usage";
@@ -25,6 +28,12 @@ exit(1);
 
 my $conf=shift;
 my $step=shift;
+
+my $resume = 0;
+if($step eq "resume"){
+    $resume = 1;
+    $step = shift || "all";
+}
 
 my %conf;
 &load_conf($conf, \%conf);
@@ -43,6 +52,22 @@ $conf{GRNA} = abs_path($conf{GRNA});
 mkdir $conf{OUTDIR} unless(-d "$conf{OUTDIR}");
 
 if($step eq "all" || $step eq "create_makefile"){
+
+# Check if already done
+my $mk1 = "$conf{OUTDIR}/$conf{PREFIX}_plus/makefile";
+my $mk2 = "$conf{OUTDIR}/$conf{PREFIX}_minus/makefile";
+if($resume && -f $mk1 && -f $mk2){
+    print STDERR "[INFO] Makefiles already exist, skip creation (use 'create_makefile' to force re-generate).\n";
+}else{
+# Validate config keys
+foreach my $k (qw(PREFIX OUTDIR FORWARD_LIB_R1 FORWARD_LIB_R2 FORWARD_LIB_TAG REVERSE_LIB_R1 REVERSE_LIB_R2 REVERSE_LIB_TAG GRNA INDEX REF CHROMSIZE MINLEN READLEN MAXINS THREAD ADAPTER BIN FASTQC STAR BEDTOOLS SAMTOOLS PICARD AdapterRemoval umi_tools water bedops)){
+    defined $conf{$k} or die "[ERROR] Missing config key: $k\n";
+}
+
+# Validate input files
+foreach my $k (qw(FORWARD_LIB_R1 FORWARD_LIB_R2 REVERSE_LIB_R1 REVERSE_LIB_R2)){
+    -f $conf{$k} or die "[ERROR] $k file not found: $conf{$k}\n";
+}
 # create sample.lst
 open OUT,">","$conf{OUTDIR}/sample.lst" || die $!;
 print OUT "$conf{PREFIX}_plus\t$conf{FORWARD_LIB_R1}\t$conf{FORWARD_LIB_R2}\tforward\t$conf{FORWARD_LIB_TAG}\n";
@@ -91,18 +116,59 @@ print OUT "REF\t$conf{REF}\n";
 print OUT "CHROMSIZE\t$conf{CHROMSIZE}\n";
 close OUT;
 
-# run guide-seq
-chdir $conf{OUTDIR};
-`perl $conf{BIN}/guideseq.v5.pl config.txt > $conf{PREFIX}.log 2>$conf{PREFIX}.err`;
+	# run guide-seq
+	chdir $conf{OUTDIR};
+	print STDERR "[INFO] Running guideseq.v5.pl to generate Makefiles ...\n";
+	my $guide_ret = system("perl $conf{BIN}/guideseq.v5.pl config.txt > $conf{PREFIX}.log 2>$conf{PREFIX}.err");
+	if($guide_ret != 0){
+		die "[ERROR] guideseq.v5.pl failed (exit=$guide_ret). Check:\n  tail -50 $conf{PREFIX}.err\n  tail -50 $conf{OUTDIR}/$conf{PREFIX}_plus/err\n";
+	}
+	print STDERR "[INFO] Makefiles generated successfully.\n";
+	}
 } # create makefile END. 
 
 if($step eq "all" || $step eq "align"){
 	chdir $conf{OUTDIR};
-	`cd $conf{OUTDIR}/$conf{PREFIX}\_plus/ && make > log 2>err && cd -`;
-	`cd $conf{OUTDIR}/$conf{PREFIX}\_minus/ && make > log 2>err && cd -`;
+	
+	foreach my $sample ("$conf{PREFIX}_plus", "$conf{PREFIX}_minus"){
+		my $dir = "$conf{OUTDIR}/$sample";
+		if(!-d $dir){
+			print STDERR "[WARN] Sample dir not found: $dir (skip)\n";
+			next;
+		}
+		if(!-f "$dir/makefile"){
+			print STDERR "[WARN] Makefile not found: $dir/makefile (skip)\n";
+			next;
+		}
+		
+		# Resume: check if all steps already complete
+		if($resume && -f "$dir/03visual.finished"){
+			print STDERR "[INFO] $sample: all steps already complete, skip.\n";
+			next;
+		}
+		
+		print STDERR "[INFO] Running make for $sample ...\n";
+		my $ret = system("cd $dir && make > log 2>err");
+		if($ret != 0){
+			print STDERR "[ERROR] make failed for $sample (exit=$ret). Check:\n";
+			print STDERR "  tail -50 $dir/err\n";
+			print STDERR "  tail -50 $dir/log\n";
+			# Continue to allow other samples to complete
+		}else{
+			print STDERR "[INFO] make completed for $sample.\n";
+		}
+	}
 	
 	# get stat
-	`perl $conf{BIN}/getMatrics.pl $conf{PREFIX}\_plus $conf{PREFIX}\_minus > stat.txt`;
+	print STDERR "[INFO] Generating statistics ...\n";
+	if(-d "$conf{OUTDIR}/$conf{PREFIX}_plus" && -d "$conf{OUTDIR}/$conf{PREFIX}_minus"){
+		my $stat_ret = system("perl $conf{BIN}/getMatrics.pl $conf{PREFIX}_plus $conf{PREFIX}_minus > stat.txt 2>>$conf{PREFIX}.err");
+		if($stat_ret != 0){
+			print STDERR "[WARN] getMatrics.pl failed (exit=$stat_ret), some files may be missing.\n";
+		}else{
+			print STDERR "[INFO] Statistics written to $conf{OUTDIR}/stat.txt\n";
+		}
+	}
 } # alignment END
 
 
@@ -111,13 +177,21 @@ if($step eq "all" || $step eq "find_target"){
 	open IN,"$conf{GRNA}" || die $!;
 	while(<IN>){
 		chomp;
-		my @t = split /\t/;
+		my @t = split /\s+/;
 		my $id = $t[0];
 		my $grna_seq = $t[1];
 		my $pam = $t[2];
 		$conf{PAM} = $pam;
 		
 		print STDERR "## Detect off-target sites for $id, sgRNA: $grna_seq, PAM:$pam. Start ... ##\n";
+
+		# Resume: skip if already completed
+		my $done_marker = "$conf{OUTDIR}/$id.find.target/$id.parsing_water_for_visualization.offtarget.bed";
+		if($resume && -f $done_marker){
+			print STDERR "[INFO] $id: already done (found $done_marker), skip.\n";
+			print STDERR "## Detect off-target sites for $id, sgRNA: $grna_seq, PAM:$pam. End  ... ##\n";
+			next;
+		}
 
 		mkdir "$conf{OUTDIR}/$id.find.target" unless(-d "$conf{OUTDIR}/$id.find.target");
 		chdir "$conf{OUTDIR}/$id.find.target";
@@ -137,12 +211,76 @@ if($step eq "all" || $step eq "find_target"){
 		print OUT "perl $conf{BIN}/find_targetsite.v2.pl ../$conf{PREFIX}\_plus/02potentialTargets/$conf{PREFIX}\_plus.plus.proximal.sorted ../$conf{PREFIX}\_plus/02potentialTargets/$conf{PREFIX}\_plus.minus.proximal.sorted ../$conf{PREFIX}\_minus/02potentialTargets/$conf{PREFIX}\_minus.plus.proximal.sorted ../$conf{PREFIX}\_minus/02potentialTargets/$conf{PREFIX}\_minus.minus.proximal.sorted $conf{CTRL} $conf{OUTDIR}/$id.find.target/grna.fa $conf{PAM} $conf{BIN}/../data/$conf{GENOME}.blacklist.bed $conf{REF} $conf{CHROMSIZE} $id $conf{MinSupportReadCount} $conf{MinCuttingEventCount} $conf{MaxMismatch} $conf{MaxGap} $conf{MaxGapMismatch}\n";
 		close OUT;
 		
-		`perl $conf{BIN}/find_targetsite.v2.pl ../$conf{PREFIX}\_plus/02potentialTargets/$conf{PREFIX}\_plus.plus.proximal.sorted ../$conf{PREFIX}\_plus/02potentialTargets/$conf{PREFIX}\_plus.minus.proximal.sorted ../$conf{PREFIX}\_minus/02potentialTargets/$conf{PREFIX}\_minus.plus.proximal.sorted ../$conf{PREFIX}\_minus/02potentialTargets/$conf{PREFIX}\_minus.minus.proximal.sorted $conf{CTRL} $conf{OUTDIR}/$id.find.target/grna.fa $conf{PAM} $conf{BIN}/../data/$conf{GENOME}.blacklist.bed $conf{REF} $conf{CHROMSIZE} $id $conf{MinSupportReadCount} $conf{MinCuttingEventCount} $conf{MaxMismatch} $conf{MaxGap} $conf{MaxGapMismatch}`;
+		# Check prerequisite files exist before running
+		my @prereqs = (
+			"../$conf{PREFIX}_plus/02potentialTargets/$conf{PREFIX}_plus.plus.proximal.sorted",
+			"../$conf{PREFIX}_plus/02potentialTargets/$conf{PREFIX}_plus.minus.proximal.sorted",
+			"../$conf{PREFIX}_minus/02potentialTargets/$conf{PREFIX}_minus.plus.proximal.sorted",
+			"../$conf{PREFIX}_minus/02potentialTargets/$conf{PREFIX}_minus.minus.proximal.sorted",
+			$conf{REF},
+			$conf{CHROMSIZE},
+			"$conf{BIN}/../data/$conf{GENOME}.blacklist.bed"
+		);
+		my $all_ok = 1;
+		foreach my $pf (@prereqs){
+			if(!-f $pf && !-e $pf){
+				print STDERR "[WARN] Prerequisite not found: $pf\n";
+				$all_ok = 0;
+			}elsif(-f $pf && !-s $pf){
+				print STDERR "[WARN] Prerequisite is empty (0 targets): $pf\n";
+				$all_ok = 0;
+			}
+		}
+		unless($all_ok){
+			print STDERR "[ERROR] Skipping $id: prerequisite files missing. Run 'align' step first.\n";
+			next;
+		}
+		
+		# Check if any targets exist - skip if empty
+		my $total_targets = 0;
+		foreach my $pf (@prereqs[0..3]){
+			if(-f $pf && -s $pf){ $total_targets++; }
+		}
+		if($total_targets == 0){
+			print STDERR "[WARN] $id: no potential targets found in alignment output, skip.\n";
+			next;
+		}
+		
+		print STDERR "[INFO] Running find_targetsite for $id ...\n";
+		my $ft_ret = system("perl $conf{BIN}/find_targetsite.v2.pl " .
+			"../$conf{PREFIX}_plus/02potentialTargets/$conf{PREFIX}_plus.plus.proximal.sorted " .
+			"../$conf{PREFIX}_plus/02potentialTargets/$conf{PREFIX}_plus.minus.proximal.sorted " .
+			"../$conf{PREFIX}_minus/02potentialTargets/$conf{PREFIX}_minus.plus.proximal.sorted " .
+			"../$conf{PREFIX}_minus/02potentialTargets/$conf{PREFIX}_minus.minus.proximal.sorted " .
+			"$conf{CTRL} $conf{OUTDIR}/$id.find.target/grna.fa $conf{PAM} " .
+			"$conf{BIN}/../data/$conf{GENOME}.blacklist.bed $conf{REF} $conf{CHROMSIZE} " .
+			"$id $conf{MinSupportReadCount} $conf{MinCuttingEventCount} " .
+			"$conf{MaxMismatch} $conf{MaxGap} $conf{MaxGapMismatch} " .
+			"2>> $conf{OUTDIR}/$id.find.target/run.err");
+		if($ft_ret != 0){
+			print STDERR "[ERROR] find_targetsite.v2.pl failed for $id (exit=$ft_ret)\n";
+			print STDERR "  Check: $conf{OUTDIR}/$id.find.target/run.err\n";
+			next;
+		}
 		
 		# check sites
+		my $offtarget_bed = "../$id.parsing_water_for_visualization.offtarget.bed";
+		unless(-f $offtarget_bed){
+			print STDERR "[WARN] Offtarget BED not found for $id (may have no hits)\n";
+		}
+		
 		mkdir "sites" unless(-d "sites");
 		chdir "sites";
-		`perl $conf{BIN}/monitoring_offtargets.pl ../$id.parsing_water_for_visualization.offtarget.bed ../../$conf{PREFIX}\_plus/03visual/$conf{PREFIX}\_plus.plus.bdg ../../$conf{PREFIX}\_plus/03visual/$conf{PREFIX}\_plus.minus.bdg ../../$conf{PREFIX}\_minus/03visual/$conf{PREFIX}\_minus.plus.bdg ../../$conf{PREFIX}\_minus/03visual/$conf{PREFIX}\_minus.minus.bdg > monitoring_offtargets.log 2>monitoring_offtargets.err`;
+		my $mon_ret = system("perl $conf{BIN}/monitoring_offtargets.pl " .
+			"../$id.parsing_water_for_visualization.offtarget.bed " .
+			"../../$conf{PREFIX}_plus/03visual/$conf{PREFIX}_plus.plus.bdg " .
+			"../../$conf{PREFIX}_plus/03visual/$conf{PREFIX}_plus.minus.bdg " .
+			"../../$conf{PREFIX}_minus/03visual/$conf{PREFIX}_minus.plus.bdg " .
+			"../../$conf{PREFIX}_minus/03visual/$conf{PREFIX}_minus.minus.bdg " .
+			"> monitoring_offtargets.log 2>monitoring_offtargets.err");
+		if($mon_ret != 0){
+			print STDERR "[WARN] monitoring_offtargets.pl failed for $id (exit=$mon_ret)\n";
+		}
 		chdir "..";
 		
 		# check global site distribution (remove this part, 2020.09.29)

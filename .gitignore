@@ -1,35 +1,21 @@
-!Build/
-.last_cover_stats
-/META.yml
-/META.json
-/MYMETA.*
-*.o
-*.pm.tdy
-*.bs
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
 
-# Devel::Cover
-cover_db/
+# Pipeline output
+outdir/
 
-# Devel::NYTProf
-nytprof.out
+# Data
+raw_data/
+*.fq
+*.fq.gz
 
-# Dizt::Zilla
-/.build/
-
-# Module::Build
-_build/
-Build
-Build.bat
-
-# Module::Install
-inc/
-
-# ExtUtils::MakeMaker
-/blib/
-/_eumm/
-/*.gz
-/Makefile
-/Makefile.old
-/MANIFEST.bak
-/pm_to_blib
-/*.zip
+# Temp / reports
+report_*.md
+report_*.pdf
+fix_summary.md
+test_fix.pl

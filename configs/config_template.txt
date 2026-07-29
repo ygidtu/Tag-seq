@@ -1,0 +1,40 @@
+# Tag-seq 简化配置文件模板
+# 格式: key<TAB>value 或 key<SPACE>value
+#
+# 必填项 (最少 6 行即可运行):
+#   LIB_R1, LIB_R2, FORWARD_TAG, REVERSE_TAG
+#   INDEX, REF, CHROMSIZE
+#
+# 注意: FORWARD_TAG/REVERSE_TAG 需填入原始tag的反向互补
+#   原始tag = TGCGATAACACGCATTTCGCATAAG
+#   配置中应填: CTTATGCGAAATGCGTGTTATCGCA
+
+# ========== 测序数据 ==========
+# forward 和 reverse 共用同一份数据, TAG 区分方向
+LIB_R1  ./raw_data/sample_R1.fq.gz
+LIB_R2  ./raw_data/sample_R2.fq.gz
+FORWARD_TAG     CTTATGCGAAATGCGTGTTATCGCA
+REVERSE_TAG     CGCATTTCGCATAAGGCTCAGAGAT
+
+# ========== 样品信息 ==========
+PREFIX  SAMPLE_NAME
+OUTDIR  ./outdir/SAMPLE_NAME
+
+# ========== gRNA 列表 ==========
+# 格式: id<空白>sequence<空白>PAM
+GRNA    ./sgrna_list.txt
+
+# ========== 参考基因组 ==========
+INDEX   /path/to/reference/star_index
+GENOME  hg38
+REF     /path/to/reference/genome.fa
+CHROMSIZE       /path/to/reference/genome.chrom.sizes
+
+# ========== 可选 ==========
+CTRL    /path/to/control.bed
+ADAPTER ./bin/adapters.txt
+BIN     /path/to/Tag-seq/bin           # 自定义脚本目录
+
+# ========== 参数 ==========
+MINLEN  50
+THREAD  16

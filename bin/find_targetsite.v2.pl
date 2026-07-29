@@ -128,11 +128,20 @@ close OUT;
 # Filtering sites overlap with Control sample. This part is not well designed, currently.
 # extend the sequence
 # 2020/2/27 zhoujj2013@gmail.com
-`bedtools slop -i $prefix.all.sites.merged.confirmed -g $chrom_size -b 50 > $prefix.all.sites.merged.confirmed.ext.raw.bed`;
+`bedtools slop -i $prefix.all.sites.merged.confirmed -g $chrom_size -b 40 > $prefix.all.sites.merged.confirmed.ext.raw.bed`;
 `bedtools intersect -a $prefix.all.sites.merged.confirmed.ext.raw.bed -b $bg_f -v > $prefix.all.sites.merged.confirmed.ext.bed`;
 
 # get fasta sequence for the targeted sites
 `bedtools getfasta -fi $ref -bed $prefix.all.sites.merged.confirmed.ext.bed > $prefix.all.sites.merged.confirmed.ext.fa`;
+
+# Check if any targets found - if empty, skip downstream processing
+if(-z "$prefix.all.sites.merged.confirmed.ext.fa"){
+    print STDERR "[WARN] $prefix: no confirmed target sites, skip alignment and visualization.\n";
+    `touch $prefix.parsing_water_for_visualization.offtarget.bed`;
+    `touch $prefix.parsing_water_for_visualization.offtarget.combined.forVis.bed`;
+    exit(0);
+}
+
 open OUT,">","$prefix.all.sites.merged.confirmed.ext.rev.fa" || die $!;
 open IN,"$prefix.all.sites.merged.confirmed.ext.fa" || die $!;
 $/ = ">";<IN>;$/ = "\n";
@@ -222,6 +231,6 @@ mkdir "./$prefix.drawTargetsite" unless(-d "./$prefix.drawTargetsite");
 
 #print "python $Bin/visualization.py --identified_file $prefix.parsing_water_for_visualization.offtarget.combined.forVis.bed --outfile $prefix.drawTargetsite/$prefix\_offtargets --title $prefix --PAM $pam\n";
 
-`python $Bin/visualization.py --identified_file $prefix.parsing_water_for_visualization.offtarget.combined.forVis.bed --outfile $prefix.drawTargetsite/$prefix\_offtargets --title $prefix --PAM $pam`;
+`python3 $Bin/visualization.py --identified_file $prefix.parsing_water_for_visualization.offtarget.combined.forVis.bed --outfile $prefix.drawTargetsite/$prefix\_offtargets --title $prefix --PAM $pam`;
 `rsvg-convert -f pdf -o $prefix.drawTargetsite/$prefix\_offtargets.pdf $prefix.drawTargetsite/$prefix\_offtargets.svg`;
 ##################### end #######################

@@ -1,0 +1,19 @@
+# Tag-seq test config (Python pipeline, new format)
+#
+LIB_R1  ./test/data/4P_R_R1.fq.gz
+LIB_R2  ./test/data/4P_R_R2.fq.gz
+FORWARD_TAG     CTTATGCGAAATGCGTGTTATCGCA
+REVERSE_TAG     CGCATTTCGCATAAGGCTCAGAGAT
+
+PREFIX  TEST
+OUTDIR  ./outdir/TEST
+GRNA    ./test/sgrna.lst
+CTRL    ./test/control.bed
+
+MINLEN  50
+THREAD  4
+
+INDEX   /rawdata/reference/hg19/star_index
+GENOME  hg19
+REF     /rawdata/reference/hg19/hg19.fa
+CHROMSIZE       /rawdata/reference/hg19/hg19.chrom.sizes
