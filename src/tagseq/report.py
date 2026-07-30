@@ -9,17 +9,22 @@ from .alignment import parse_star_log
 from .types import SampleReport  # noqa: F401
 
 
-def _read_odn(path: Path) -> tuple[int, int]:
-    t = p = 0
+def _read_odn(path: Path) -> tuple[int, int, int, int]:
+    """Read rmODN stat, return (total, passed, r2_count, r1_count)."""
+    t = p = r2 = r1 = 0
     if not path.exists():
-        return t, p
+        return t, p, r2, r1
     with open(path) as f:
         for line in f:
             m = re.search(r"Raw flagment count:\s+(\d+)", line)
             if m: t = int(m.group(1))
             m = re.search(r"Read count with ODN:\s+(\d+)", line)
             if m: p = int(m.group(1))
-    return t, p
+            m = re.search(r"Tag in R2:\s+(\d+)", line)
+            if m: r2 = int(m.group(1))
+            m = re.search(r"Tag in R1:\s+(\d+)", line)
+            if m: r1 = int(m.group(1))
+    return t, p, r2, r1
 
 
 def _read_adapter_setting(path: Path) -> int:
@@ -68,7 +73,7 @@ def generate_report(prefix: str, outdir: Path) -> list[SampleReport]:
         ad = outdir / sample / "01alignment"
         td = outdir / sample / "02potentialTargets"
 
-        sr.total_reads, sr.odn_passed = _read_odn(dd / f"{sample}.rmODN.stat")
+        sr.total_reads, sr.odn_passed, r2c, r1c = _read_odn(dd / f"{sample}.rmODN.stat")
         sr.trim_input = _read_adapter_setting(dd / f"{sample}.adapterRemoval.setting")
         sr.alignment = parse_star_log(ad / f"{sample}.Log.final.out")
         sr.trim_passed = sr.alignment.input_reads

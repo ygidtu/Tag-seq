@@ -94,8 +94,12 @@ def step_align(cfg: PipelineConfig) -> None:
         dd = cfg.data_dir(sample_name)
         dd.mkdir(parents=True, exist_ok=True)
 
-        # 1. ODN removal
-        r1, r2, _ = remove_odn(cfg.lib_r1, cfg.lib_r2, tag, dd, sample_name)
+        # 1. ODN removal (checks both R1 and R2 for tag)
+        r1, r2, _, tag_in_r2 = remove_odn(cfg.lib_r1, cfg.lib_r2, tag, dd, sample_name)
+
+        # If tag was predominantly in R1, swap R1/R2 roles downstream
+        if not tag_in_r2:
+            r1, r2 = r2, r1
 
         # 2. Cutadapt
         _run_cutadapt(r1, r2, cfg, sample_name)
