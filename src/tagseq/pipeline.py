@@ -172,6 +172,7 @@ def step_find_target(cfg: PipelineConfig) -> None:
             min_support=cfg.min_support_readcount,
             cut_events=cfg.min_cutting_event_count,
             max_mismatch=cfg.max_mismatch,
+            pam=gpam,
         )
 
 

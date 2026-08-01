@@ -260,6 +260,8 @@ def plot_offtarget_alignment(
 
     ref = grna_seq.upper()
     ref_len = len(ref)
+    pam_len = len(pam)
+    total_len = ref_len + pam_len
     n = len(rows)
     font = FontProperties(family="monospace", size=11)
     font_small = FontProperties(family="monospace", size=8)
@@ -272,14 +274,14 @@ def plot_offtarget_alignment(
     y_ticks = 38
     y_ref = 48
     row_h = BS + 3
-    right_col = x0 + (ref_len + 3) * BS
+    right_col = x0 + (total_len + 3) * BS
 
-    fig_w = (ref_len + 10) * BS / 72 + 1.5
+    fig_w = (total_len + 10) * BS / 72 + 1.5
     total_h = margin_top + 20 + (n + 2) * row_h
     fig_h = total_h / 72 + 0.5
 
     fig, ax = plt.subplots(1, 1, figsize=(fig_w, fig_h))
-    ax.set_xlim(0, (ref_len + 10) * BS + 40)
+    ax.set_xlim(0, (total_len + 10) * BS + 40)
     ax.set_ylim(total_h, 0)
     ax.set_aspect("equal")
     ax.axis("off")
@@ -294,29 +296,36 @@ def plot_offtarget_alignment(
     if title:
         ax.text(x0, y_title, title, fontproperties=font_title)
 
-    # Position ticks (every 10th position)
+    # Position ticks (every 10th position, gRNA only)
     for pos in range(1, ref_len + 1):
         if pos == 1 or pos == ref_len or pos % 10 == 0:
             ax.text(center_x(pos - 1), y_ticks, str(pos),
                     ha="center", va="center", fontproperties=font_small)
 
-    # PAM labels
-    pam_len = len(pam)
-    pam_start = ref_len - pam_len
+    # PAM labels (above the PAM boxes after the gRNA spacer)
+    pam_start = ref_len
     for pi in range(pam_len):
         ax.text(center_x(pam_start + pi), y_ticks - 12, pam[pi],
                 ha="center", va="center",
                 fontproperties=FontProperties(family="monospace", size=8, weight="bold"),
                 color="#555")
 
-    # Reference row: colored boxes for each base
+    # Reference row: gRNA boxes + PAM boxes (on-target as first row)
     y = y_ref
     for i in range(ref_len):
         c = ref[i]
-        color = "#D0D0D0" if i >= pam_start else BASE_COLORS.get(c, "#B3B3B3")
+        color = BASE_COLORS.get(c, "#B3B3B3")
         ax.add_patch(mpatches.FancyBboxPatch(
             (x0 + i * BS, y), BS, BS, boxstyle="round,pad=0", facecolor=color, edgecolor="#999"))
         ax.text(center_x(i), center_y(y), c, ha="center", va="center", fontproperties=font, color="black")
+    for pi in range(pam_len):
+        c = pam[pi]
+        color = BASE_COLORS.get(c, "#B3B3B3")
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (x0 + (ref_len + pi) * BS, y), BS, BS, boxstyle="round,pad=0",
+            facecolor=color, edgecolor="#555", linewidth=1.2))
+        ax.text(center_x(ref_len + pi), center_y(y), c, ha="center", va="center",
+                fontproperties=font, color="black")
 
     # Build aligned entries from pre-computed BED data (no re-alignment needed)
     ref_seq = grna_seq.upper() if not perfect else perfect[0]["ref_seq"]
@@ -331,24 +340,47 @@ def plot_offtarget_alignment(
         logger.warning("No alignments for {}", title)
         return None
 
-    # Separate reference from off-targets
+    # Separate on-target (perfect) from off-targets
     if perfect:
-        ref_entry = aligned[0]
+        on_entry = aligned[0]
         off_entries = aligned[1:]
     else:
-        ref_entry = None
+        on_entry = None
         off_entries = aligned
 
     total_off_reads = sum(sc for _, sc, _, _, _, _, _ in off_entries)
+    total_reads = total_off_reads + (on_entry[1] if on_entry else 0)
     ax.text(right_col, center_y(y_ref), "Sites", va="center",
             fontproperties=FontProperties(family="monospace", size=9, weight="bold"), color="#333")
 
-    # Aligned rows — one column per reference base
+    # Row indices: 0 = reference template, 1 = on-target, 2+ = off-targets
+    next_row = 1
+    if on_entry:
+        sid, score, mm, strand, aligned_seq, genome_aln, coord = on_entry
+        y = y_ref + next_row * row_h
+        for ri, ch in enumerate(aligned_seq):
+            if ri >= total_len:
+                break
+            x = x0 + ri * BS
+            cx, cy = x + BS / 2, y + BS / 2
+            if ch == "-" or ch == ".":
+                ax.add_patch(mpatches.Circle((cx, cy), BS * 0.12, facecolor="#333", edgecolor="none"))
+            else:
+                color = BASE_COLORS.get(ch, "#B3B3B3")
+                ax.add_patch(mpatches.FancyBboxPatch((x, y), BS, BS, boxstyle="round,pad=0", facecolor=color, edgecolor="#999"))
+                ax.text(cx, cy, ch, ha="center", va="center", fontproperties=font, color="black")
+        on_pct = score / total_reads * 100 if total_reads > 0 else 0
+        label = f"{int(score)} ({on_pct:.2f}%)  {coord}"
+        ax.text(right_col, center_y(y), label, va="center",
+                fontproperties=FontProperties(family="monospace", size=9, weight="bold"), color="#333")
+        next_row = 2
+
+    # Aligned rows — one column per reference base (gRNA + PAM)
     for j, (sid, score, mm, strand, aligned_seq, genome_aln, coord) in enumerate(off_entries):
-        y = y_ref + (j + 1) * row_h
+        y = y_ref + (j + next_row) * row_h
 
         for ri, ch in enumerate(aligned_seq):
-            if ri >= ref_len:
+            if ri >= total_len:
                 break
             x = x0 + ri * BS
             cx, cy = x + BS / 2, y + BS / 2
@@ -359,8 +391,8 @@ def plot_offtarget_alignment(
                 ax.add_patch(mpatches.FancyBboxPatch((x, y), BS, BS, boxstyle="round,pad=0", facecolor=color, edgecolor="#999"))
                 ax.text(cx, cy, ch, ha="center", va="center", fontproperties=font, color="black")
 
-        # Right side: count (pct) + coord
-        pct = score / total_off_reads * 100 if total_off_reads > 0 else 0
+        # Right side: count (pct) + coord (pct based on total reads shown)
+        pct = score / total_reads * 100 if total_reads > 0 else 0
         label = f"{int(score)} ({pct:.2f}%)  {coord}"
         ax.text(right_col, center_y(y), label, va="center", fontproperties=font_small, color="#333")
 

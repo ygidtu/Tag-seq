@@ -48,7 +48,7 @@ def find_offtargets(
     plus_plus, plus_minus, minus_plus, minus_minus,
     control, blacklist, grna_seq, ref_fa, chromsize,
     prefix, outdir,
-    min_support=1, cut_events=2, max_mismatch=6,
+    min_support=1, cut_events=2, max_mismatch=6, pam="",
 ):
     import pysam
     from Bio import SeqIO
@@ -115,7 +115,7 @@ def find_offtargets(
                 logger.warning("{}: all sites filtered by {}", prefix, name)
                 return None
 
-    extended = [_slop(iv, chrom_len, 40) for iv in confirmed]
+    extended = [_slop(iv, chrom_len, 150) for iv in confirmed]
     ext_bed = outdir / f"{prefix}.ext.bed"
     with open(ext_bed, "w") as f:
         for iv in extended:
@@ -133,11 +133,16 @@ def find_offtargets(
         return None
 
     aligner = PairwiseAligner()
-    aligner.mode = "local"
+    aligner.mode = "global"
     aligner.match_score = 5
     aligner.mismatch_score = -4
     aligner.open_gap_score = -10
     aligner.extend_gap_score = -0.5
+    # Semi-global: gRNA must align end-to-end, target ends are free.
+    aligner.open_left_insertion_score = 0
+    aligner.extend_left_insertion_score = 0
+    aligner.open_right_insertion_score = 0
+    aligner.extend_right_insertion_score = 0
 
     results = []
     records = list(SeqIO.parse(ext_fa, "fasta"))
@@ -155,18 +160,9 @@ def find_offtargets(
                 if not grna_aln:
                     pbar.update(1)
                     continue
-                ai = 0
-                mm = 0
-                for ri in range(len(grna_seq)):
-                    while ai < len(grna_aln) and grna_aln[ai] == "-":
-                        ai += 1
-                    if ai >= len(grna_aln) or ai >= len(genome_aln):
-                        break
-                    if genome_aln[ai] != "-" and grna_aln[ai] != genome_aln[ai]:
-                        mm += 1
-                    ai += 1
+                mm, disp, t_start, t_end = _score_alignment(grna_seq, pam, grna_aln, genome_aln)
                 if mm <= max_mismatch:
-                    results.append((record.id, best.score, mm, strand_label, genome_aln, grna_aln))
+                    results.append((record.id, best.score, mm, strand_label, genome_aln, grna_aln, disp, t_start, t_end))
             pbar.update(1)
     pbar.close()
 
@@ -178,19 +174,27 @@ def find_offtargets(
 
     # Build entries with read count, aligned sequence, ref seq
     bed_entries = []
-    for rid, sc, mm, strand, genome_aln, grna_aln in results:
+    for rid, sc, mm, strand, genome_aln, grna_aln, disp, t_start, t_end in results:
         if ":" in rid:
             chrom = rid.split(":")[0]
             rest = rid.split(":", 1)[1]
             coords = rest.split("|")[0] if "|" in rest else rest
             if "-" in coords:
                 start_str, end_str = coords.split("-")
-                start = int(start_str)
-                end = int(end_str)
+                ext_start = int(start_str)
+                ext_end = int(end_str)
             else:
-                start, end = 0, 0
+                ext_start, ext_end = 0, 0
         else:
-            chrom, start, end = rid, 0, 0
+            chrom, ext_start, ext_end = rid, 0, 0
+        # gRNA match genomic coordinates (within the slopped ext region), including PAM
+        pam_len = len(pam)
+        if strand == "+":
+            start = ext_start + t_start
+            end = ext_start + t_end + pam_len
+        else:
+            start = ext_end - t_end - pam_len
+            end = ext_end - t_start
         # Parse count from rid header: ...|cnt=N|...
         read_count = 1
         if "|cnt=" in rid:
@@ -200,26 +204,6 @@ def find_offtargets(
                 read_count = int(cnt_val)
             except ValueError:
                 pass
-
-        # Extract gRNA-aligned 20bp display sequence
-        disp_chars = []
-        ai = 0
-        for ri in range(len(grna_seq)):
-            while ai < len(grna_aln) and grna_aln[ai] == "-":
-                ai += 1
-            if ai >= len(grna_aln) or ai >= len(genome_aln):
-                disp_chars.append("-")
-                continue
-            tc = genome_aln[ai]
-            gc = grna_aln[ai]
-            if tc == "-":
-                disp_chars.append("-")
-            elif gc == tc:
-                disp_chars.append(".")
-            else:
-                disp_chars.append(tc)
-            ai += 1
-        disp = "".join(disp_chars)
         bed_entries.append((chrom, start, end, rid, sc, mm, strand, read_count, genome_aln, grna_aln, disp))
 
     # Sort by reads desc, then score desc
@@ -228,7 +212,17 @@ def find_offtargets(
     # Move perfect match (all dots) to top
     perfect = [e for e in bed_entries if e[10].replace(".", "") == ""]
     others = [e for e in bed_entries if e[10].replace(".", "") != ""]
-    bed_entries = perfect + others
+
+    # Merge all perfect (on-target) matches into a single reference row
+    if perfect:
+        ref = list(perfect[0])
+        ref[7] = sum(e[7] for e in perfect)          # sum read counts
+        ref[3] = ",".join(e[3] for e in perfect)     # join ids/coords
+        ref[1] = min(e[1] for e in perfect)          # min start
+        ref[2] = max(e[2] for e in perfect)          # max end
+        bed_entries = [tuple(ref)] + others
+    else:
+        bed_entries = others
 
     # Deduplicate by position: keep higher score strand
     seen_pos = set()
@@ -250,32 +244,96 @@ def find_offtargets(
     return bed
 
 
+def _score_alignment(grna: str, pam: str, grna_aln: str, genome_aln: str) -> tuple[int, str]:
+    """Compute mismatch count (incl. internal indels) and display string.
+
+    gRNA must align end-to-end (semi-global). Only the region covered by gRNA
+    characters contributes to the score; target prefixes/suffixes are free.
+    Display: '.' = match, base = mismatch, '-' = gap (insertion/deletion).
+
+    The PAM bases (gRNA 3' flank) are appended to the display string (matched
+    as '.', otherwise the actual base) but never counted in the mismatch score.
+    """
+    gstart = 0
+    while gstart < len(grna_aln) and grna_aln[gstart] == "-":
+        gstart += 1
+    gend = len(grna_aln) - 1
+    while gend >= 0 and grna_aln[gend] == "-":
+        gend -= 1
+    mm = 0
+    disp = []
+    ai = gstart
+    for _ in range(len(grna)):
+        while ai <= gend and grna_aln[ai] == "-":
+            ai += 1
+            mm += 1  # insertion into target
+        if ai > gend:
+            disp.append("-")
+            mm += 1
+            continue
+        gc = grna_aln[ai]
+        tc = genome_aln[ai]
+        if tc == "-":
+            disp.append("-")
+            mm += 1  # deletion from target
+        elif gc == tc:
+            disp.append(".")
+        else:
+            disp.append(tc)
+            mm += 1
+        ai += 1
+
+    # Append PAM bases (gRNA 3' flank) — not counted in mm
+    if pam:
+        for i in range(len(pam)):
+            while ai < len(genome_aln) and genome_aln[ai] == "-":
+                ai += 1
+            if ai >= len(genome_aln):
+                disp.append("-")
+                continue
+            tc = genome_aln[ai]
+            gc = pam[i]
+            if tc == "-":
+                disp.append("-")
+            elif gc == tc:
+                disp.append(".")
+            else:
+                disp.append(tc)
+            ai += 1
+
+    # gRNA match interval within the target sequence
+    t_start = sum(1 for ch in genome_aln[:gstart] if ch != "-")
+    t_end = sum(1 for ch in genome_aln[:gend + 1] if ch != "-")
+    return mm, "".join(disp), t_start, t_end
+
+
 def _build_alignment(query: str, target: str, aligner) -> tuple[str, str]:
-    """Build gapped alignment strings of equal length."""
+    """Build gapped alignment strings of equal length using coordinates.
+
+    Unlike ``Alignment.aligned`` (whose blocks may not correspond character-wise
+    when gaps split one sequence into many blocks), ``Alignment.coordinates``
+    gives a per-column track: each column advances query and/or target, so we can
+    reconstruct correctly aligned, equal-length strings.
+    """
     alns = aligner.align(query, target)
     if not alns:
         return "", ""
     best = alns[0]
-    coords = best.aligned
-    q_blocks = coords[0]
-    t_blocks = coords[1]
+    coords = best.coordinates
+    q_pos = coords[0]
+    t_pos = coords[1]
     q_parts, t_parts = [], []
-    qi = ti = 0
-    for (qs, qe), (ts, te) in zip(q_blocks, t_blocks):
-        if qs > qi:
-            q_parts.append(query[qi:qs])
-            t_parts.append("-" * (qs - qi))
-        if ts > ti:
-            q_parts.append("-" * (ts - ti))
-            t_parts.append(target[ti:ts])
-        q_parts.append(query[qs:qe])
-        t_parts.append(target[ts:te])
-        qi = qe
-        ti = te
-    if qi < len(query):
-        q_parts.append(query[qi:])
-        t_parts.append("-" * (len(query) - qi))
-    if ti < len(target):
-        q_parts.append("-" * (len(target) - ti))
-        t_parts.append(target[ti:])
+    for k in range(len(q_pos) - 1):
+        qs, qe = q_pos[k], q_pos[k + 1]
+        ts, te = t_pos[k], t_pos[k + 1]
+        ql, tl = qe - qs, te - ts
+        if ql == 0:
+            q_parts.append("-" * tl)
+            t_parts.append(target[ts:te])
+        elif tl == 0:
+            q_parts.append(query[qs:qe])
+            t_parts.append("-" * ql)
+        else:
+            q_parts.append(query[qs:qe])
+            t_parts.append(target[ts:te])
     return "".join(q_parts), "".join(t_parts)
