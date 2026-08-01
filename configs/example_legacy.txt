@@ -1,0 +1,39 @@
+# Tag-seq 旧版文库配置模板 (legacy)
+# ─────────────────────────────────────────
+# 旧版文库结构: P5 + UMI + barcode + adapter junction + genome + Tag + P7
+#   R1: AATGATACGGCGACCACCGAGATCTACAC...NNWNNWNNBBBBBBBBACTACTAATACGACTXXX...XXX[Tag]AGATCGGAAGAGC...
+#   UMI 位于 read 开头 (P5 修剪后), 因此 UMI_OFFSET 默认 0, 无需 UMI_PREFIX
+#
+# 格式: key<TAB or SPACE>value
+LIB_R1  ./raw_data/sample_R1.fq.gz
+LIB_R2  ./raw_data/sample_R2.fq.gz
+
+# Tag 序列 (填入原始 tag 的反向互补, 脚本内部会再转一次)
+FORWARD_TAG     CTTATGCGAAATGCGTGTTATCGCA
+REVERSE_TAG     CGCATTTCGCATAAGGCTCAGAGAT
+
+PREFIX  SAMPLE
+OUTDIR  ./outdir/SAMPLE
+ADAPTER data/adapters.txt
+
+GRNA    ./sgrna_list.txt
+CTRL    /path/to/control.bed
+
+INDEX   /path/to/reference/star_index
+GENOME  hg38
+REF     /path/to/reference/genome.fa
+CHROMSIZE       /path/to/reference/genome.chrom.sizes
+
+# 旧版文库: UMI 在 read 开头
+LIB_TYPE        legacy
+UMI_LEN         8
+
+MINLEN  50
+READLEN 150
+THREAD  16
+
+MinSupportReadCount     1
+MinCuttingEventCount    2
+MaxMismatch     6
+MaxGap  2
+MaxGapMismatch  4

@@ -64,6 +64,14 @@ def load_config(path: str) -> PipelineConfig:
     blacklist = _read_path(raw, "BLACKLIST")
     if not blacklist and bin_dir:
         blacklist = bin_dir.parent / "data" / f"{genome}.blacklist.bed"
+
+    # 文库类型: legacy (UMI 位于 read 开头) / modified (UMI 位于 Universal primer 之后)
+    lib_type = _read_optional(raw, "LIB_TYPE", "legacy").strip().lower()
+    if lib_type not in ("legacy", "modified"):
+        raise ConfigError(f"Unknown LIB_TYPE: {lib_type} (expect 'legacy' or 'modified')")
+    default_offset = 15 if lib_type == "modified" else 0
+    default_prefix = "TAGCACCACGGATGG" if lib_type == "modified" else ""
+
     return PipelineConfig(
         prefix=prefix, outdir=outdir, lib_r1=lib_r1, lib_r2=lib_r2,
         forward_tag=fwd_tag, reverse_tag=rev_tag,
@@ -73,8 +81,9 @@ def load_config(path: str) -> PipelineConfig:
         maxins=_read_int(raw, "MAXINS", 1000),
         threads=_read_int(raw, "THREAD", 4),
         umi_len=_read_int(raw, "UMI_LEN", 8),
-        umi_offset=_read_int(raw, "UMI_OFFSET", 0),
-        umi_prefix=_read_optional(raw, "UMI_PREFIX", ""),
+        umi_offset=_read_int(raw, "UMI_OFFSET", default_offset),
+        umi_prefix=_read_optional(raw, "UMI_PREFIX", default_prefix),
+        lib_type=lib_type,
         min_support_readcount=_read_int(raw, "MinSupportReadCount", 1),
         min_cutting_event_count=_read_int(raw, "MinCuttingEventCount", 2),
         max_mismatch=_read_int(raw, "MaxMismatch", 6),

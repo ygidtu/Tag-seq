@@ -23,7 +23,8 @@ MINLEN  50
 READLEN 150
 THREAD  16
 UMI_LEN 8
-UMI_OFFSET      14
+LIB_TYPE        modified
+UMI_OFFSET      15
 UMI_PREFIX      TAGCACCACGGATGG
 
 INDEX	/rawdata1/reference/hg38/star

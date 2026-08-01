@@ -47,10 +47,13 @@ MINLEN  50      # 最短 read 长度
 READLEN 150     # read 长度
 THREAD  16      # CPU 线程数
 
-# UMI 配置 (改造后文库: UMI 位于 Universal primer 之后)
-UMI_LEN     8                   # UMI 长度
-UMI_OFFSET  14                  # UMI 起始位置 (跳过 primer, 默认 0)
-UMI_PREFIX  TAGCACCACGGATGG     # Universal primer (仅该前缀开头的 reads 提取 UMI)
+# UMI 配置
+#   legacy   : UMI 位于 read 开头 (旧版文库, 默认 UMI_OFFSET=0, 无需 UMI_PREFIX)
+#   modified : UMI 位于 Universal primer 之后 (改造后文库, 默认 UMI_OFFSET=15)
+LIB_TYPE    legacy                  # legacy / modified
+UMI_LEN     8                       # UMI 长度
+# UMI_OFFSET 15                    # UMI 起始位置 (覆盖 LIB_TYPE 默认, 通常无需设置)
+# UMI_PREFIX TAGCACCACGGATGG       # Universal primer (仅该前缀开头的 reads 提取 UMI)
 
 MinSupportReadCount     1       # 至少支持 reads 数
 MinCuttingEventCount    2       # 至少方向数

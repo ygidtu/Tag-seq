@@ -107,17 +107,25 @@ CHROMSIZE   /path/to/genome.chrom.sizes
 
 参见 `configs/example_full.txt`。
 
-### 3.3 UMI 与接头配置
+### 3.3 UMI 与文库结构配置
 
-改造后文库的 reads 结构为 `Universal primer + UMI + barcode + adapter junction + genome + TAG`。
-UMI 位于 primer 之后，因此需配置其位置（默认为 0，即 UMI 在 read 开头）：
+通过 `LIB_TYPE` 指定文库结构，pipeline 据此确定 UMI 提取位置：
+
+| 类型 | 文库结构 | UMI 位置 |
+|------|---------|---------|
+| `legacy`（默认） | P5 + **UMI** + barcode + junction + genome + Tag + P7 | read 开头（`UMI_OFFSET=0`） |
+| `modified` | Universal primer + **UMI** + barcode + junction + genome + Tag | primer 之后（`UMI_OFFSET=15`） |
 
 ```
-UMI_LEN     8                    # UMI 长度
-UMI_OFFSET  14                   # UMI 起始位置（跳过 Universal primer 的长度）
-UMI_PREFIX  TAGCACCACGGATGG      # Universal primer（仅以此前缀开头的 reads 提取 UMI）
-ADAPTER     data/adapters.txt    # 3' 接头序列（P5/P7 + adapter junction）
+LIB_TYPE    legacy                  # legacy / modified
+UMI_LEN     8                       # UMI 长度
+# UMI_OFFSET 14                    # 可选: 覆盖 LIB_TYPE 默认位置
+# UMI_PREFIX TAGCACCACGGATGG       # 可选: 仅以此前缀开头的 reads 提取 UMI
+ADAPTER     data/adapters.txt       # 3' 接头序列 (P5/P7 + adapter junction)
 ```
+
+`UMI_OFFSET` / `UMI_PREFIX` 可显式覆盖 `LIB_TYPE` 的默认值；不设置时自动取对应默认。
+旧版文库配置见 `configs/example_legacy.txt`。
 
 ### 3.4 Tag 序列说明
 
@@ -135,7 +143,8 @@ ADAPTER     data/adapters.txt    # 3' 接头序列（P5/P7 + adapter junction）
 |------|------|
 | `configs/example_minimal.txt` | 最小配置模板 |
 | `configs/example_full.txt` | 全参数配置模板 |
-| `configs/TAG-1.txt` | TAG-1 样本 (hg38) |
+| `configs/example_legacy.txt` | 旧版文库配置模板（UMI 在 read 开头） |
+| `configs/TAG-1.txt` | TAG-1 样本 (hg38, 改造后文库) |
 | `configs/test_py.txt` | 测试配置 (hg19) |
 
 ---
