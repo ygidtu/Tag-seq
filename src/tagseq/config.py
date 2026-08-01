@@ -73,6 +73,8 @@ def load_config(path: str) -> PipelineConfig:
         maxins=_read_int(raw, "MAXINS", 1000),
         threads=_read_int(raw, "THREAD", 4),
         umi_len=_read_int(raw, "UMI_LEN", 8),
+        umi_offset=_read_int(raw, "UMI_OFFSET", 0),
+        umi_prefix=_read_optional(raw, "UMI_PREFIX", ""),
         min_support_readcount=_read_int(raw, "MinSupportReadCount", 1),
         min_cutting_event_count=_read_int(raw, "MinCuttingEventCount", 2),
         max_mismatch=_read_int(raw, "MaxMismatch", 6),

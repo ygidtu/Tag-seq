@@ -1,13 +1,14 @@
 from __future__ import annotations
 import re
 from pathlib import Path
+import pysam
 from loguru import logger
 from tqdm import tqdm
-from .fastq import open_fastq, open_fastq_write, count_reads
+from .fastq import open_fastq_write
 
 
 def _find_odn(seq: str, odn: str) -> int:
-    pos = 0; start = 0
+    pos = -1; start = 0
     while True:
         m = re.search(re.escape(odn), seq[start:])
         if not m: break
@@ -15,61 +16,58 @@ def _find_odn(seq: str, odn: str) -> int:
     return pos
 
 
-def _process_read(fin):
-    h = fin.readline()
-    if not h: return None, None, None, None
-    return h, fin.readline(), fin.readline(), fin.readline()
+def _check_tags(seq, tags):
+    """Check all tags, return (tag_name, position) for first match or (None, None)."""
+    for tag_name, tag_seq in tags.items():
+        pos = _find_odn(seq, tag_seq)
+        if pos >= 0 and seq[pos + len(tag_seq):].strip():
+            return tag_name, pos
+    return None, None
 
 
-def remove_odn(r1_path: Path, r2_path: Path, odn_seq: str, outdir: Path, prefix: str) -> tuple:
-    """Remove ODN tag. Checks both R1/R2, both forward and rev-comp."""
+def remove_odn(r1_path: Path, r2_path: Path, fwd_tag: str, rev_tag: str, outdir: Path, prefix: str) -> tuple:
+    """Remove ODN tag in a single pass through R1/R2. Checks all 4 tags (fwd/rc + rev/rc).
+
+    Reads FASTQ with pysam (supports gzip transparently).
+    """
     outdir.mkdir(parents=True, exist_ok=True)
     r1_out = outdir / f"{prefix}.rmODN.R1.fq.gz"
     r2_out = outdir / f"{prefix}.rmODN.R2.fq.gz"
     stat_file = outdir / f"{prefix}.rmODN.stat"
 
-    n_total = count_reads(r2_path)
-    rev_comp = odn_seq.translate(str.maketrans("ATCGatcg", "TAGCtagc"))[::-1]
+    fwd_rc = fwd_tag.translate(str.maketrans("ATCGatcg", "TAGCtagc"))[::-1]
+    rev_rc = rev_tag.translate(str.maketrans("ATCGatcg", "TAGCtagc"))[::-1]
 
-    def _scan(path, label):
-        kept, seqs, quals = set(), {}, {}
-        with open_fastq(path) as fin:
-            pbar = tqdm(total=n_total, unit="reads", desc=f"  {label}", leave=False)
-            while True:
-                h, s, p, q = _process_read(fin)
-                if h is None: break
-                bid = re.sub(r"/\d+$", "", h.split()[0].lstrip("@"))
-                pos = _find_odn(s, odn_seq)
-                if pos == 0:
-                    pos = _find_odn(s, rev_comp)
-                if pos > 0 and s[pos:].strip():
-                    kept.add(bid)
-                    seqs[bid] = s[pos:]
-                    quals[bid] = q[pos:]
-                pbar.update(1)
-            pbar.close()
-        return kept, seqs, quals
+    all_tags = {
+        "fwd": fwd_tag,
+        "fwd_rc": fwd_rc,
+        "rev": rev_tag,
+        "rev_rc": rev_rc,
+    }
 
-    r2_kept, r2_seq, r2_qual = _scan(r2_path, "R2 ODN scan")
-    r1_kept, r1_seq, r1_qual = _scan(r1_path, "R1 ODN scan")
-
-    n_r2 = 0; n_r1 = 0
-    with open_fastq(r1_path) as f1, open_fastq(r2_path) as f2, \
+    n_total = 0; n_r2 = 0; n_r1 = 0
+    pbar = tqdm(unit="reads", desc=f"  ODN scan ({prefix})", leave=False)
+    with pysam.FastxFile(str(r1_path)) as f1, pysam.FastxFile(str(r2_path)) as f2, \
          open_fastq_write(r1_out) as o1, open_fastq_write(r2_out) as o2:
-        pbar = tqdm(total=n_total, unit="reads", desc="  Merge", leave=False)
-        while True:
-            h1, s1, p1, q1 = _process_read(f1)
-            if h1 is None: break
-            h2, s2, p2, q2 = _process_read(f2)
-            bid = re.sub(r"/\d+$", "", h1.split()[0].lstrip("@"))
-            if bid in r2_kept:
-                o1.write(f"{h1.split()[0]}\n{s1}{p1}{q1}")
-                o2.write(f"{h2.split()[0]}\n{r2_seq[bid]}{p2}{r2_qual[bid]}")
+        for e1, e2 in zip(f1, f2):
+            n_total += 1
+            bid = re.sub(r"/\d+$", "", e1.name)
+            h1 = f"@{e1.name}"
+            h2 = f"@{e2.name}"
+            s1, q1 = e1.sequence, e1.quality
+            s2, q2 = e2.sequence, e2.quality
+
+            _, pos = _check_tags(s2, all_tags)
+            if pos is not None:
+                o1.write(f"{h1}\n{s1}\n+\n{q1}\n")
+                o2.write(f"{h2}\n{s2[pos:]}\n+\n{q2[pos:]}\n")
                 n_r2 += 1
-            elif bid in r1_kept:
-                o1.write(f"{h1.split()[0]}\n{r1_seq[bid]}{p1}{r1_qual[bid]}")
-                o2.write(f"{h2.split()[0]}\n{s2}{p2}{q2}")
-                n_r1 += 1
+            else:
+                _, pos = _check_tags(s1, all_tags)
+                if pos is not None:
+                    o1.write(f"{h1}\n{s1[pos:]}\n+\n{q1[pos:]}\n")
+                    o2.write(f"{h2}\n{s2}\n+\n{q2}\n")
+                    n_r1 += 1
             pbar.update(1)
         pbar.close()
 

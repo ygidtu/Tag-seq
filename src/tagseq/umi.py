@@ -3,10 +3,19 @@ from loguru import logger
 from pathlib import Path
 from .fastq import open_fastq, open_fastq_write
 
-def extract_umi(r1_path: Path, r2_path: Path, outdir: Path, prefix: str, umi_len: int = 8) -> tuple[Path, Path]:
-    r1_out = outdir / f"{prefix}.Trim.R1.umis.fq.gz"
-    r2_out = outdir / f"{prefix}.Trim.R2.umis.fq.gz"
+
+def extract_umi(r1_path: Path, r2_path: Path, outdir: Path, prefix: str,
+                umi_len: int = 8, umi_offset: int = 0, umi_prefix: str = "") -> tuple[Path, Path]:
+    """Extract UMI from R1.
+
+    When umi_prefix is set (e.g. the Universal primer of a modified library),
+    only reads whose R1 starts with that prefix get their UMI removed at
+    [umi_offset, umi_offset+umi_len); other reads are kept intact (no UMI).
+    """
+    r1_out = outdir / f"{prefix}.umis.R1.fq.gz"
+    r2_out = outdir / f"{prefix}.umis.R2.fq.gz"
     total = 0
+    n_umi = 0
     with open_fastq(r1_path) as f1, open_fastq(r2_path) as f2, \
          open_fastq_write(r1_out) as o1, open_fastq_write(r2_out) as o2:
         while True:
@@ -15,11 +24,28 @@ def extract_umi(r1_path: Path, r2_path: Path, outdir: Path, prefix: str, umi_len
             s1 = f1.readline(); p1 = f1.readline(); q1 = f1.readline()
             h2 = f2.readline(); s2 = f2.readline(); p2 = f2.readline(); q2 = f2.readline()
             total += 1
-            umi = s1[:umi_len]
-            o1.write(f"{h1.split()[0]}:UMI_{umi}\n{s1[umi_len:]}{p1}{q1[umi_len:]}")
+            if umi_prefix:
+                if s1.startswith(umi_prefix) and len(s1) >= umi_offset + umi_len:
+                    umi = s1[umi_offset:umi_offset + umi_len]
+                    seq = s1[:umi_offset] + s1[umi_offset + umi_len:]
+                    qual = q1[:umi_offset] + q1[umi_offset + umi_len:]
+                    n_umi += 1
+                else:
+                    umi = ""
+                    seq, qual = s1, q1
+            else:
+                if len(s1) >= umi_len:
+                    umi = s1[:umi_len]
+                    seq, qual = s1[umi_len:], q1[umi_len:]
+                    n_umi += 1
+                else:
+                    umi = ""
+                    seq, qual = s1, q1
+            o1.write(f"{h1.split()[0]}:UMI_{umi}\n{seq}{p1}{qual}")
             o2.write(f"{h2}{s2}{p2}{q2}")
-    logger.info("UMI extracted from {} reads", total)
+    logger.info("UMI extracted from {}/{} reads", n_umi, total)
     return r1_out, r2_out
+
 
 def dedup_umi(bam_path: Path) -> Path:
     import pysam

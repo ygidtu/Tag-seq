@@ -39,13 +39,18 @@ CTRL            /path/to/control.bed    # 对照样本 BED
 BLACKLIST       /path/to/blacklist.bed  # 黑名单 (默认: data/{GENOME}.blacklist.bed)
 
 # ═══════════════════ 可选: 自定义路径 ═══════════════════
-ADAPTER ./bin/adapters.txt              # 接头序列 (默认: bin/adapters.txt)
+ADAPTER ./data/adapters.txt              # 接头序列 (默认: bin/adapters.txt)
 BIN     /path/to/Tag-seq/bin            # 自定义脚本目录
 
 # ═══════════════════ 分析参数 ═══════════════════
 MINLEN  50      # 最短 read 长度
 READLEN 150     # read 长度
 THREAD  16      # CPU 线程数
+
+# UMI 配置 (改造后文库: UMI 位于 Universal primer 之后)
+UMI_LEN     8                   # UMI 长度
+UMI_OFFSET  14                  # UMI 起始位置 (跳过 primer, 默认 0)
+UMI_PREFIX  TAGCACCACGGATGG     # Universal primer (仅该前缀开头的 reads 提取 UMI)
 
 MinSupportReadCount     1       # 至少支持 reads 数
 MinCuttingEventCount    2       # 至少方向数

@@ -20,6 +20,8 @@ class PipelineConfig:
     maxins: int = 1000
     threads: int = 16
     umi_len: int = 8
+    umi_offset: int = 0
+    umi_prefix: str = ""
     min_support_readcount: int = 1
     min_cutting_event_count: int = 2
     max_mismatch: int = 6

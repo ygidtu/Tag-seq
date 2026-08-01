@@ -28,12 +28,13 @@ def _read_odn(path: Path) -> tuple[int, int, int, int]:
 
 
 def _read_adapter_setting(path: Path) -> int:
+    """Read 'Total read pairs processed' from a cutadapt report file."""
     if not path.exists():
         return 0
     with open(path) as f:
         for line in f:
-            m = re.search(r"Total number of read pairs:\s+(\d+)", line)
-            if m: return int(m.group(1))
+            m = re.search(r"Total read pairs processed:\s+([\d,]+)", line)
+            if m: return int(m.group(1).replace(",", ""))
     return 0
 
 
@@ -74,7 +75,7 @@ def generate_report(prefix: str, outdir: Path) -> list[SampleReport]:
         td = outdir / sample / "02potentialTargets"
 
         sr.total_reads, sr.odn_passed, r2c, r1c = _read_odn(dd / f"{sample}.rmODN.stat")
-        sr.trim_input = _read_adapter_setting(dd / f"{sample}.adapterRemoval.setting")
+        sr.trim_input = _read_adapter_setting(dd / f"{sample}.trim_report.txt")
         sr.alignment = parse_star_log(ad / f"{sample}.Log.final.out")
         sr.trim_passed = sr.alignment.input_reads
 

@@ -340,8 +340,7 @@ def plot_offtarget_alignment(
         off_entries = aligned
 
     total_off_reads = sum(sc for _, sc, _, _, _, _, _ in off_entries)
-    ref_pct = ref_count / (ref_count + total_off_reads) * 100 if (ref_count + total_off_reads) > 0 else 0
-    ax.text(right_col, center_y(y_ref), f"{ref_count} ({ref_pct:.2f}%)", va="center",
+    ax.text(right_col, center_y(y_ref), "Sites", va="center",
             fontproperties=FontProperties(family="monospace", size=9, weight="bold"), color="#333")
 
     # Aligned rows — one column per reference base
@@ -353,19 +352,16 @@ def plot_offtarget_alignment(
                 break
             x = x0 + ri * BS
             cx, cy = x + BS / 2, y + BS / 2
-            if ch == "-":
-                ax.add_patch(mpatches.Circle((cx, cy), BS * 0.14, facecolor="#333", edgecolor="none"))
-            elif ch == ".":
-                ax.add_patch(mpatches.Circle((cx, cy), BS * 0.10, facecolor="#333", edgecolor="none"))
+            if ch == "-" or ch == ".":
+                ax.add_patch(mpatches.Circle((cx, cy), BS * 0.12, facecolor="#333", edgecolor="none"))
             else:
                 color = BASE_COLORS.get(ch, "#B3B3B3")
                 ax.add_patch(mpatches.FancyBboxPatch((x, y), BS, BS, boxstyle="round,pad=0", facecolor=color, edgecolor="#999"))
                 ax.text(cx, cy, ch, ha="center", va="center", fontproperties=font, color="black")
 
-        # Right side: count + coord
+        # Right side: count (pct) + coord
         pct = score / total_off_reads * 100 if total_off_reads > 0 else 0
         label = f"{int(score)} ({pct:.2f}%)  {coord}"
-        ax.text(right_col, center_y(y), label, va="center", fontproperties=font_small, color="#333")
         ax.text(right_col, center_y(y), label, va="center", fontproperties=font_small, color="#333")
 
     plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)

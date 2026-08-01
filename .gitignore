@@ -19,3 +19,6 @@ report_*.md
 report_*.pdf
 fix_summary.md
 test_fix.pl
+
+# Core dumps
+core.*

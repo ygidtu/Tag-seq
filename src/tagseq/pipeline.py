@@ -89,25 +89,37 @@ def step_create_makefile(cfg: PipelineConfig) -> None:
 
 def step_align(cfg: PipelineConfig) -> None:
     _check_tools()
-    for sample_name, tag in cfg.samples:
+    import shutil
+    samples = cfg.samples
+
+    # 正负文库使用相同的 R1/R2，ODN 去除只需读取一次
+    first_name, _ = samples[0]
+    dd0 = cfg.data_dir(first_name)
+    dd0.mkdir(parents=True, exist_ok=True)
+    r1_odn, r2_odn, _, _ = remove_odn(
+        cfg.lib_r1, cfg.lib_r2, cfg.forward_tag, cfg.reverse_tag, dd0, first_name)
+
+    for sample_name, tag in samples:
         logger.info("=== {} ===", sample_name)
         dd = cfg.data_dir(sample_name)
         dd.mkdir(parents=True, exist_ok=True)
 
-        # 1. ODN removal (checks both R1 and R2 for tag)
-        r1, r2, _, tag_in_r2 = remove_odn(cfg.lib_r1, cfg.lib_r2, tag, dd, sample_name)
+        # 1. ODN removal 结果（正负文库复用同一份）
+        r1 = dd / f"{sample_name}.rmODN.R1.fq.gz"
+        r2 = dd / f"{sample_name}.rmODN.R2.fq.gz"
+        if r1 != r1_odn or r2 != r2_odn:
+            shutil.copy(r1_odn, r1)
+            shutil.copy(r2_odn, r2)
 
-        # If tag was predominantly in R1, swap R1/R2 roles downstream
-        if not tag_in_r2:
-            r1, r2 = r2, r1
-
-        # 2. Cutadapt
+        # 2. Cutadapt（修剪 3' 接头，保留 5' primer/UMI 供 UMI 提取）
         _run_cutadapt(r1, r2, cfg, sample_name)
         r1t = dd / f"{sample_name}.Trim.R1.fq.gz"
         r2t = dd / f"{sample_name}.Trim.R2.fq.gz"
 
-        # 3. UMI extraction
-        r1u, r2u = extract_umi(r1t, r2t, dd, sample_name)
+        # 3. UMI 提取（改造后文库 UMI 位于 primer 之后）
+        r1u, r2u = extract_umi(r1t, r2t, dd, sample_name,
+                               umi_len=cfg.umi_len, umi_offset=cfg.umi_offset,
+                               umi_prefix=cfg.umi_prefix)
 
         # 4. STAR
         bam = run_star(r1u, r2u, cfg.index, cfg.outdir, sample_name, cfg.threads)

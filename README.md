@@ -34,7 +34,8 @@ FASTQ (R1/R2)
 
 - **纯 Python 实现**：35 个 Perl 脚本 → 12 个 Python 模块
 - **依赖精简**：只需 STAR + cutadapt 两个外部工具
-- **配置简化**：6 行必填（LIB_R1、LIB_R2、FORWARD_TAG、REVERSE_TAG、INDEX、REF、CHROMSIZE）
+- **单遍 ODN 检测**：pysam 单次扫描 R1/R2，同时检测 4 种 Tag（正反向互补）
+- **UMI 位置可配置**：支持 UMI 位于 primer 之后（改造后文库），而非固定 read 开头
 - **自动 .fq.gz 支持**：无需手动解压
 - **uv 项目管理**：可复现安装，锁定依赖版本
 
@@ -106,7 +107,19 @@ CHROMSIZE   /path/to/genome.chrom.sizes
 
 参见 `configs/example_full.txt`。
 
-### 3.3 Tag 序列说明
+### 3.3 UMI 与接头配置
+
+改造后文库的 reads 结构为 `Universal primer + UMI + barcode + adapter junction + genome + TAG`。
+UMI 位于 primer 之后，因此需配置其位置（默认为 0，即 UMI 在 read 开头）：
+
+```
+UMI_LEN     8                    # UMI 长度
+UMI_OFFSET  14                   # UMI 起始位置（跳过 Universal primer 的长度）
+UMI_PREFIX  TAGCACCACGGATGG      # Universal primer（仅以此前缀开头的 reads 提取 UMI）
+ADAPTER     data/adapters.txt    # 3' 接头序列（P5/P7 + adapter junction）
+```
+
+### 3.4 Tag 序列说明
 
 `FORWARD_TAG` / `REVERSE_TAG` 需填入**原始 tag 的反向互补序列**。脚本内部会再做一次反向互补，最终得到原始 tag 用于匹配 R2。
 
@@ -116,7 +129,7 @@ CHROMSIZE   /path/to/genome.chrom.sizes
 脚本处理后:    TGCGATAACACGCATTTCGCATAAG（恢复原始 tag，匹配 R2）
 ```
 
-### 3.4 本项目已有配置文件
+### 3.5 本项目已有配置文件
 
 | 文件 | 说明 |
 |------|------|
@@ -168,8 +181,10 @@ outdir/PREFIX/
 ├── PREFIX_plus/                     # 正向文库
 │   ├── 00datafilter/
 │   │   ├── PREFIX.rmODN.R1/R2.fq    # ODN 去除后
-│   │   ├── PREFIX.Trim.R1/R2.fq     # 修剪后
-│   │   └── PREFIX.Trim.R1/R2.umis.fq # UMI 提取后
+│   │   ├── PREFIX.Trim.R1/R2.fq     # cutadapt 修剪后
+│   │   ├── PREFIX.umis.R1/R2.fq     # UMI 提取后
+│   │   ├── PREFIX.rmODN.stat        # ODN 统计
+│   │   └── PREFIX.trim_report.txt   # cutadapt 报告
 │   ├── 01alignment/
 │   │   ├── PREFIX.Aligned.sortedByCoord.out.bam
 │   │   └── PREFIX.Aligned.sortedByCoord.out.dedup.bam
@@ -178,7 +193,9 @@ outdir/PREFIX/
 │       └── PREFIX.minus.proximal      # 负链候选位点
 ├── PREFIX_minus/                     # 反向文库（结构同上）
 └── gRNA_ID.find.target/
-    └── gRNA_ID.parsing_water_for_visualization.offtarget.bed
+    ├── gRNA_ID.parsing_water_for_visualization.offtarget.bed
+    ├── gRNA_ID.ext.fa               # 候选位点序列
+    └── gRNA_ID_offtargets.pdf/.svg  # 可视化图
 ```
 
 ### 5.2 统计报告
