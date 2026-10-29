@@ -17,12 +17,22 @@ def _bed_merge(intervals, dist=0):
     yield [cur_chrom, cur_start, cur_end] + cur_rest
 
 def _overlap_count(clusters, bed_intervals):
+    # bed_intervals 由 mids 生成, 每个区间长度=1 (be=bs+1), 故重叠条件
+    # (bs < ce and be > cs) 等价于 cs <= bs < ce。按 chrom 收集 start 排序后
+    # 用二分统计, 将 O(clusters*intervals) 降为 O(N log N)。
+    from bisect import bisect_left
+    starts = {}
+    for bi in bed_intervals:
+        starts.setdefault(bi[0], []).append(bi[1])
+    for v in starts.values():
+        v.sort()
     for cl in clusters:
-        cc, cs, ce = cl[:3]; cnt = 0
-        for bi in bed_intervals:
-            bc, bs, be = bi[:3]
-            if bc == cc and bs < ce and be > cs: cnt += 1
-        yield cl, cnt
+        cc, cs, ce = cl[:3]
+        arr = starts.get(cc)
+        if not arr:
+            yield cl, 0
+            continue
+        yield cl, bisect_left(arr, ce) - bisect_left(arr, cs)
 
 def detect_targets(bam_path: Path, sample_dir: Path, sample_name: str, chromsize: Path, min_qual: int = 30) -> None:
     import pysam

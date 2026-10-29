@@ -71,6 +71,41 @@ def _run_cutadapt(r1: Path, r2: Path, cfg: PipelineConfig, sample: str) -> None:
 
 # ── step implementations ──
 
+def parse_mixed(r1_path: Path, r2_path: Path, outdir: Path, prefix: str, cfg: PipelineConfig) -> tuple[Path, Path]:
+    """混测文库解析: 逐对 R1/R2, 按 L/R 判定提取 UMI/barcode, 剥离两端人工序列;
+    无法判定(ambiguous)的 read 丢弃。UMI 与文库类型写入 read 名供后续 dedup/追溯。"""
+    from collections import Counter
+    from .library import classify_extract, parse_r2
+    from .fastq import open_fastq, open_fastq_write
+    spec = cfg.lib_spec
+    r1_out = outdir / f"{prefix}.mixed.R1.fq.gz"
+    r2_out = outdir / f"{prefix}.mixed.R2.fq.gz"
+    st = Counter()
+    with open_fastq(r1_path) as f1, open_fastq(r2_path) as f2, \
+         open_fastq_write(r1_out) as o1, open_fastq_write(r2_out) as o2:
+        while True:
+            h1 = f1.readline()
+            if not h1: break
+            s1 = f1.readline().rstrip("\n"); p1 = f1.readline(); q1 = f1.readline().rstrip("\n")
+            h2 = f2.readline(); s2 = f2.readline().rstrip("\n"); p2 = f2.readline(); q2 = f2.readline().rstrip("\n")
+            st["total"] += 1
+            ce = classify_extract(s1, spec, cfg.forward_tag, cfg.reverse_tag)
+            if ce is None:
+                st["ambiguous"] += 1
+                continue
+            r2p = parse_r2(s2, spec)
+            import re as _re
+            base = _re.sub(r"/[12]$", "", h1.rstrip("\n").split()[0])
+            hdr = f"{base}:UMI_{ce['umi']}:LIB_{ce['type']}"
+            o1.write(f"{hdr}\n{s1[ce['g_start']:ce['g_end']]}\n+\n{q1[ce['g_start']:ce['g_end']]}\n")
+            o2.write(f"{hdr}\n{s2[r2p['g_start']:r2p['g_end']]}\n+\n{q2[r2p['g_start']:r2p['g_end']]}\n")
+            st[ce["type"]] += 1
+    logger.info("parse_mixed: total={total} L={L} R={R} ambiguous={ambiguous} (kept {kept})",
+                total=st["total"], L=st["L"], R=st["R"], ambiguous=st["ambiguous"],
+                kept=st["L"] + st["R"])
+    return r1_out, r2_out
+
+
 def step_create_makefile(cfg: PipelineConfig) -> None:
     cfg.outdir.mkdir(parents=True, exist_ok=True)
     warns = []
@@ -92,37 +127,46 @@ def step_align(cfg: PipelineConfig) -> None:
     import shutil
     samples = cfg.samples
 
-    # 正负文库使用相同的 R1/R2，ODN 去除只需读取一次
+    # 比对入口口径由 ODN_MODE 决定 (默认 rmODN = 与 TAG-1/3/5 既有结果一致)
     first_name, _ = samples[0]
     dd0 = cfg.data_dir(first_name)
     dd0.mkdir(parents=True, exist_ok=True)
-    r1_odn, r2_odn, _, _ = remove_odn(
-        cfg.lib_r1, cfg.lib_r2, cfg.forward_tag, cfg.reverse_tag, dd0, first_name)
+
+    if cfg.odn_mode == "mixed":
+        logger.info("ODN_MODE=mixed: parse_mixed 结构解析 (5' primer 锚点判 L/R, 丢弃 ambiguous) — 实验口径")
+        pre = "mixed"
+        r1p, r2p = parse_mixed(cfg.lib_r1, cfg.lib_r2, dd0, cfg.prefix, cfg)
+    else:
+        logger.info("ODN_MODE=rmODN: remove_odn 过滤 (R1/R2 任一端含 tag 才保留) — 既有 TAG-1/3/5 口径")
+        pre = "rmODN"
+        r1p, r2p, _, _ = remove_odn(
+            cfg.lib_r1, cfg.lib_r2, cfg.forward_tag, cfg.reverse_tag, dd0, first_name)
 
     for sample_name, tag in samples:
         logger.info("=== {} ===", sample_name)
         dd = cfg.data_dir(sample_name)
         dd.mkdir(parents=True, exist_ok=True)
 
-        # 1. ODN removal 结果（正负文库复用同一份）
-        r1 = dd / f"{sample_name}.rmODN.R1.fq.gz"
-        r2 = dd / f"{sample_name}.rmODN.R2.fq.gz"
-        if r1 != r1_odn or r2 != r2_odn:
-            shutil.copy(r1_odn, r1)
-            shutil.copy(r2_odn, r2)
+        # 1. 过滤/解析结果复用（正负文库同一份 clean reads）
+        r1 = dd / f"{sample_name}.{pre}.R1.fq.gz"
+        r2 = dd / f"{sample_name}.{pre}.R2.fq.gz"
+        if r1 != r1p or r2 != r2p:
+            shutil.copy(r1p, r1)
+            shutil.copy(r2p, r2)
 
-        # 2. Cutadapt（修剪 3' 接头，保留 5' primer/UMI 供 UMI 提取）
+        # 2. Cutadapt（修剪残留 3' 接头）
         _run_cutadapt(r1, r2, cfg, sample_name)
         r1t = dd / f"{sample_name}.Trim.R1.fq.gz"
         r2t = dd / f"{sample_name}.Trim.R2.fq.gz"
 
-        # 3. UMI 提取（改造后文库 UMI 位于 primer 之后）
-        r1u, r2u = extract_umi(r1t, r2t, dd, sample_name,
-                               umi_len=cfg.umi_len, umi_offset=cfg.umi_offset,
-                               umi_prefix=cfg.umi_prefix)
+        # 3. UMI: rmODN 口径下在此按 offset 提取 (mixed 口径已在 read 名中带 UMI)
+        if cfg.odn_mode != "mixed":
+            r1t, r2t = extract_umi(r1t, r2t, dd, sample_name,
+                                   umi_len=cfg.umi_len, umi_offset=cfg.umi_offset,
+                                   umi_prefix=cfg.umi_prefix)
 
         # 4. STAR
-        bam = run_star(r1u, r2u, cfg.index, cfg.outdir, sample_name, cfg.threads)
+        bam = run_star(r1t, r2t, cfg.index, cfg.outdir, sample_name, cfg.threads)
 
         # 5. Dedup
         dedup_bam = dedup_umi(bam)

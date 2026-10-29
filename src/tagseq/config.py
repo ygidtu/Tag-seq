@@ -4,7 +4,8 @@ from loguru import logger
 from pathlib import Path
 from typing import Optional
 from .exceptions import ConfigError
-from .types import PipelineConfig
+from .types import PipelineConfig, LibrarySpec
+from .library import validate_spec
 
 def reverse_complement(seq: str) -> str:
     table = str.maketrans("ATCGatcg", "TAGCtagc")
@@ -25,6 +26,12 @@ def _read_path(raw: dict, key: str) -> Optional[Path]:
 def _read_int(raw: dict, key: str, default: int = 0) -> int:
     try: return int(_read_optional(raw, key, str(default)))
     except: return default
+
+def _read_bool(raw: dict, key: str, default: bool = False) -> bool:
+    v = _read_optional(raw, key, "").strip().lower()
+    if v in ("1", "true", "yes", "y", "on"): return True
+    if v in ("0", "false", "no", "n", "off"): return False
+    return default
 
 def load_config(path: str) -> PipelineConfig:
     raw = {}
@@ -65,12 +72,38 @@ def load_config(path: str) -> PipelineConfig:
     if not blacklist and bin_dir:
         blacklist = bin_dir.parent / "data" / f"{genome}.blacklist.bed"
 
-    # 文库类型: legacy (UMI 位于 read 开头) / modified (UMI 位于 Universal primer 之后)
+    # 文库类型与 5' 结构 (见 library.py / TAG-seq信息.xlsx)
     lib_type = _read_optional(raw, "LIB_TYPE", "legacy").strip().lower()
     if lib_type not in ("legacy", "modified"):
         raise ConfigError(f"Unknown LIB_TYPE: {lib_type} (expect 'legacy' or 'modified')")
-    default_offset = 15 if lib_type == "modified" else 0
-    default_prefix = "TAGCACCACGGATGG" if lib_type == "modified" else ""
+    # 比对入口的过滤口径; 默认 rmODN 与 TAG-1/3/5 既有结果一致
+    odn_mode = _read_optional(raw, "ODN_MODE", "rmODN").strip().lower()
+    if odn_mode not in ("rmodn", "mixed"):
+        raise ConfigError(f"Unknown ODN_MODE: {odn_mode} (expect 'rmODN' or 'mixed')")
+    odn_mode = "rmODN" if odn_mode == "rmodn" else "mixed"
+    if lib_type == "modified":
+        d = dict(primer="TAGCACCACGGATGG", umi_len=8, umi_pattern="NNWNNWNN",
+                 barcode="TTTAGCTC", barcode_len=8, junction="ACTACTAATACGACT",
+                 tag_len=25, strip_5p=True)
+    else:
+        d = dict(primer="", umi_len=8, umi_pattern="", barcode="", barcode_len=8,
+                 junction="", tag_len=25, strip_5p=False)
+    primer = _read_optional(raw, "UNIVERSAL_PRIMER") or _read_optional(raw, "UMI_PREFIX") or d["primer"]
+    spec = LibrarySpec(
+        lib_type=lib_type,
+        primer=primer,
+        umi_len=_read_int(raw, "UMI_LEN", d["umi_len"]),
+        umi_pattern=_read_optional(raw, "UMI_PATTERN", d["umi_pattern"]),
+        barcode=_read_optional(raw, "BARCODE", d["barcode"]),
+        barcode_len=_read_int(raw, "BARCODE_LEN", d["barcode_len"]),
+        junction=_read_optional(raw, "JUNCTION", d["junction"]),
+        tag_len=_read_int(raw, "TAG_LEN", d["tag_len"]),
+        strip_5p=_read_bool(raw, "STRIP_5P", d["strip_5p"]),
+        strict=_read_bool(raw, "STRICT", False),
+    )
+    spec_errs = validate_spec(spec)
+    if spec_errs:
+        raise ConfigError("LibrarySpec 配置错误: " + "; ".join(spec_errs))
 
     return PipelineConfig(
         prefix=prefix, outdir=outdir, lib_r1=lib_r1, lib_r2=lib_r2,
@@ -80,10 +113,11 @@ def load_config(path: str) -> PipelineConfig:
         readlen=_read_int(raw, "READLEN", 150),
         maxins=_read_int(raw, "MAXINS", 1000),
         threads=_read_int(raw, "THREAD", 4),
-        umi_len=_read_int(raw, "UMI_LEN", 8),
-        umi_offset=_read_int(raw, "UMI_OFFSET", default_offset),
-        umi_prefix=_read_optional(raw, "UMI_PREFIX", default_prefix),
+        umi_len=spec.umi_len,
+        umi_offset=len(spec.primer),
+        umi_prefix=spec.primer,
         lib_type=lib_type,
+        odn_mode=odn_mode,
         min_support_readcount=_read_int(raw, "MinSupportReadCount", 1),
         min_cutting_event_count=_read_int(raw, "MinCuttingEventCount", 2),
         max_mismatch=_read_int(raw, "MaxMismatch", 6),
@@ -91,12 +125,16 @@ def load_config(path: str) -> PipelineConfig:
         max_gap_mismatch=_read_int(raw, "MaxGapMismatch", 4),
         grna_file=grna_file, ctrl=ctrl, adapter=adapter, bin_dir=bin_dir,
         blacklist=blacklist if blacklist and blacklist.exists() else None,
+        lib_spec=spec,
     )
 
 def validate_config(cfg: PipelineConfig) -> list[str]:
     """Return list of warnings/errors about config. Empty = all good."""
     issues = []
     pairs = [
+        ("LIB_R1", cfg.lib_r1),
+        ("LIB_R2", cfg.lib_r2),
+        ("ADAPTER", cfg.adapter),
         ("INDEX (Genome)", cfg.index / "Genome"),
         ("REF", cfg.ref),
         ("CHROMSIZE", cfg.chromsize),

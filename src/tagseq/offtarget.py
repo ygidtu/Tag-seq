@@ -1,15 +1,9 @@
 """Off-target identification."""
 
 from __future__ import annotations
-import logging
 from pathlib import Path
 from loguru import logger
 from tqdm import tqdm
-
-import logging
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 
 def _read_bed(path: Path, tag: str = ""):
@@ -42,6 +36,52 @@ def _merge(intervals, max_dist=10):
 def _slop(iv, chrom_len, bp=40):
     cl = chrom_len.get(iv[0], 10**9)
     return (iv[0], max(0, iv[1] - bp), min(cl, iv[2] + bp)) + iv[3:]
+
+
+def _confirm_sites(merged, combined, min_support, cut_events):
+    """扫描线累加每个 merged 区间内 combined 的 tag 计数, 仅保留满足
+    cut_events 个方向 (count>=min_support) 的位点。
+
+    与原 O(merged*combined) 双重循环严格等价: 重叠条件为
+    civ[1] < end and civ[2] > start。merged 已按 (chrom,start) 排序且互不
+    重叠 (start/end 递增), combined 按 (chrom,start) 排序; 用按 civ.end 的
+    最小堆维护当前窗口 (已入堆 => start<end; 未弹出 => end>start)。
+    """
+    import heapq
+    comb_by_chrom = {}
+    for civ in combined:
+        comb_by_chrom.setdefault(civ[0], []).append(civ)
+    for lst in comb_by_chrom.values():
+        lst.sort(key=lambda x: (x[1], x[2]))
+    merged_by_chrom = {}
+    for idx, iv in enumerate(merged):
+        merged_by_chrom.setdefault(iv[0], []).append(idx)
+    confirmed = [None] * len(merged)
+    for chrom, m_idx in merged_by_chrom.items():
+        comb = comb_by_chrom.get(chrom, [])
+        ci = 0
+        heap = []  # (civ_end, civ_count, civ_tag)
+        for idx in m_idx:
+            iv = merged[idx]
+            start, end = iv[1], iv[2]
+            mid = (start + end) // 2
+            while ci < len(comb) and comb[ci][1] < end:
+                heapq.heappush(heap, (comb[ci][2], comb[ci][4], comb[ci][5]))
+                ci += 1
+            while heap and heap[0][0] <= start:
+                heapq.heappop(heap)
+            tag_counts = {"plus_plus": 0, "plus_minus": 0,
+                          "minus_plus": 0, "minus_minus": 0}
+            for _, cnt, tag in heap:
+                if tag in tag_counts:
+                    tag_counts[tag] += cnt
+            if sum(1 for v in tag_counts.values() if v >= min_support) >= cut_events:
+                # 保留 cluster 的 [start,end] (而非中点), 使 ext 窗口覆盖整个 cluster,
+                # 避免宽 cluster 的 protospacer 落在 mid±150 之外导致 on-target 漏检。
+                confirmed[idx] = (chrom, start, end, iv[3],
+                                  tag_counts["plus_plus"], tag_counts["plus_minus"],
+                                  tag_counts["minus_plus"], tag_counts["minus_minus"])
+    return [iv for iv in confirmed if iv is not None]
 
 
 def find_offtargets(
@@ -78,20 +118,7 @@ def find_offtargets(
             combined.append(iv)
     merged = _merge(combined, 10)
 
-    confirmed = []
-    for iv in merged:
-        chrom, start, end = iv[0], iv[1], iv[2]
-        mid = (start + end) // 2
-        tag_counts = {"plus_plus": 0, "plus_minus": 0,
-                      "minus_plus": 0, "minus_minus": 0}
-        for civ in combined:
-            if civ[0] == chrom and civ[1] < end and civ[2] > start:
-                if civ[5] in tag_counts:
-                    tag_counts[civ[5]] += civ[4]
-        if sum(1 for v in tag_counts.values() if v >= min_support) >= cut_events:
-            confirmed.append((chrom, mid, mid + 1, iv[3],
-                              tag_counts["plus_plus"], tag_counts["plus_minus"],
-                              tag_counts["minus_plus"], tag_counts["minus_minus"]))
+    confirmed = _confirm_sites(merged, combined, min_support, cut_events)
 
     if not confirmed:
         logger.warning("{}: no confirmed sites (need {} orients >= {} reads)", prefix, cut_events, min_support)
@@ -103,17 +130,23 @@ def find_offtargets(
         for iv in confirmed:
             f.write("\t".join(map(str, iv)) + "\n")
 
-    for name, exclude_list in [("blacklist", _read_bed(blacklist) if blacklist and blacklist.exists() else []),
-                                ("control", _read_bed(control) if control and control.exists() else [])]:
-        if exclude_list:
-            kept = []
-            for iv in confirmed:
-                if not any(iv[0] == e[0] and iv[1] < e[2] and iv[2] > e[1] for e in exclude_list):
-                    kept.append(iv)
-            confirmed = kept
-            if not confirmed:
-                logger.warning("{}: all sites filtered by {}", prefix, name)
-                return None
+    def _nchrom(c: str) -> str:
+        return c[3:] if c.startswith("chr") else c
+
+    # 预读 blacklist/control 区间(归一化 chrom)。稍后仅用于过滤 off-target(others);
+    # on-target(perfect)豁免过滤, 避免真靶点被黑名单/对照误杀。
+    excl = {}
+    for src in (blacklist, control):
+        for e in (list(_read_bed(src)) if src and Path(src).exists() else []):
+            excl.setdefault(_nchrom(e[0]), []).append((int(e[1]), int(e[2])))
+    for v in excl.values():
+        v.sort()
+
+    def _in_excl(chrom, start, end):
+        for ss, ee in excl.get(_nchrom(chrom), ()):
+            if start < ee and end > ss:
+                return True
+        return False
 
     extended = [_slop(iv, chrom_len, 150) for iv in confirmed]
     ext_bed = outdir / f"{prefix}.ext.bed"
@@ -211,7 +244,9 @@ def find_offtargets(
 
     # Move perfect match (all dots) to top
     perfect = [e for e in bed_entries if e[10].replace(".", "") == ""]
-    others = [e for e in bed_entries if e[10].replace(".", "") != ""]
+    # on-target(perfect)豁免 blacklist/control; 仅对 off-target(others)过滤
+    others = [e for e in bed_entries
+              if e[10].replace(".", "") != "" and not _in_excl(e[0], e[1], e[2])]
 
     # Merge all perfect (on-target) matches into a single reference row
     if perfect:

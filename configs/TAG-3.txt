@@ -1,0 +1,33 @@
+# Tag-seq: TAG-3 (改造后文库, hg38)
+# Tag 序列沿用 TAG-1 (改造后文库通用接头)
+#
+LIB_R1  /mnt/nas1/数据备份/ZhangXuyue_TagSeq/20261013_E260922016_U6412_B260900916/RawData/TAG-3/E260922016_L01_TAG-3_1.fq.gz
+LIB_R2  /mnt/nas1/数据备份/ZhangXuyue_TagSeq/20261013_E260922016_U6412_B260900916/RawData/TAG-3/E260922016_L01_TAG-3_2.fq.gz
+FORWARD_TAG     ATCTCTGAGCCTTATGCGAAATGCG
+REVERSE_TAG     CTTATGCGAAATGCGTGTTATCGCA
+
+PREFIX  TAG-3
+OUTDIR  /rawdata1/projects/TagSeq_ZXY/Tag-seq/outdir/TAG-3
+ADAPTER /rawdata1/projects/TagSeq_ZXY/Tag-seq/data/adapters.txt
+GRNA    /rawdata1/projects/TagSeq_ZXY/Tag-seq/data/sgrna_TAG-3.txt
+CTRL    /rawdata1/projects/TagSeq_ZXY/Tag-seq/data/control.bed
+BLACKLIST /rawdata1/projects/TagSeq_ZXY/Tag-seq/data/hg38.blacklist.bed
+
+MinSupportReadCount     1
+MinCuttingEventCount    2
+MaxMismatch     4
+MaxGap  2
+MaxGapMismatch  4
+MINLEN  50
+READLEN 150
+THREAD  16
+UMI_LEN 8
+LIB_TYPE        modified
+UMI_OFFSET      15
+UMI_PREFIX      TAGCACCACGGATGG
+ODN_MODE        rmODN
+
+INDEX	/rawdata1/reference/hg38/star
+GENOME  hg38
+REF     /rawdata1/reference/hg38/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+CHROMSIZE       /rawdata1/reference/hg38/hg38.chrom.sizes
